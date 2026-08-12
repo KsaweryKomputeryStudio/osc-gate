@@ -44,6 +44,11 @@ export function stick01(raw) {
   return quantize(v);
 }
 
+/** Stick Y: HID up=0 → OSC 1, down=1 → OSC 0 */
+export function stickY01(raw) {
+  return quantize(1 - stick01(raw));
+}
+
 /** Raw trigger byte 0..255 → 0..1 with rest deadzone → 0 */
 export function trigger01(raw) {
   let v = clamp01(raw / 0xff);
@@ -106,9 +111,9 @@ export function stateToOscMessages(state, options = {}) {
   // --- sticks (components only) ---
   if (state.sticks) {
     push(`${p}/stick/left/x`, stick01(state.sticks.left.x));
-    push(`${p}/stick/left/y`, stick01(state.sticks.left.y));
+    push(`${p}/stick/left/y`, stickY01(state.sticks.left.y));
     push(`${p}/stick/right/x`, stick01(state.sticks.right.x));
-    push(`${p}/stick/right/y`, stick01(state.sticks.right.y));
+    push(`${p}/stick/right/y`, stickY01(state.sticks.right.y));
   }
 
   // --- analog triggers ---

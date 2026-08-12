@@ -6,8 +6,9 @@ const FLOAT_EPS = 0.0005; // matches quantize(1/1000)
 /**
  * Browser ↔ OSC gateway WebSocket client.
  *
- * Uses latest-wins throttling so HID (~250Hz) cannot flood the network
- * and build unbounded latency in the receiver's UDP queue.
+ * HID-driven latest-wins throttling (not setInterval).
+ * Chrome throttles timers hard in background tabs; DualSense inputreport
+ * callbacks keep firing, so we emit from those events when the Hz budget allows.
  */
 export class OscBridge {
   constructor({
@@ -27,7 +28,7 @@ export class OscBridge {
     this._reconnectTimer = null;
     this._wantConnect = false;
     this._latestState = null;
-    this._flushTimer = null;
+    this._lastFlushMs = 0;
     this._lastSent = new Map();
     this.ignoreImu = false;
     this.stats = { sentBundles: 0, recvMessages: 0, dropped: 0 };
@@ -41,7 +42,6 @@ export class OscBridge {
 
   setHz(hz) {
     this.hz = Math.max(1, Math.min(250, Number(hz) || DEFAULT_HZ));
-    if (this.enabled) this._restartFlush();
   }
 
   setIgnoreImu(on) {
@@ -61,7 +61,6 @@ export class OscBridge {
   disconnect() {
     this._wantConnect = false;
     this.enabled = false;
-    this._stopFlush();
     clearTimeout(this._reconnectTimer);
     if (this.ws) {
       this.ws.close();
@@ -74,9 +73,8 @@ export class OscBridge {
     this.enabled = !!on;
     if (this.enabled) {
       this._lastSent.clear();
-      this._restartFlush();
+      this._lastFlushMs = 0;
     } else {
-      this._stopFlush();
       this._latestState = null;
     }
     this.onStatus({
@@ -101,7 +99,6 @@ export class OscBridge {
     this.ws.addEventListener('open', () => {
       this._send({ type: 'config', host: this.host, port: this.port });
       this.onStatus({ connected: true, enabled: this.enabled });
-      if (this.enabled) this._restartFlush();
     });
 
     this.ws.addEventListener('message', (ev) => {
@@ -131,7 +128,6 @@ export class OscBridge {
     this.ws.addEventListener('close', () => {
       this.onStatus({ connected: false, enabled: this.enabled });
       this.ws = null;
-      this._stopFlush();
       if (this._wantConnect) this._scheduleReconnect();
     });
 
@@ -147,7 +143,6 @@ export class OscBridge {
 
   _send(obj) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      // Drop if the socket is already back-pressured
       if (this.ws.bufferedAmount > 256 * 1024) {
         this.stats.dropped++;
         return false;
@@ -158,35 +153,29 @@ export class OscBridge {
     return false;
   }
 
-  _restartFlush() {
-    this._stopFlush();
-    const interval = Math.round(1000 / this.hz);
-    this._flushTimer = setInterval(() => this._flush(), interval);
-  }
-
-  _stopFlush() {
-    if (this._flushTimer) {
-      clearInterval(this._flushTimer);
-      this._flushTimer = null;
-    }
-  }
-
   /**
-   * Store latest HID state only — never queue frames (latest-wins).
-   * Actual OSC emit happens on the throttle timer.
+   * Called from HID inputreport. Sends immediately when Hz budget allows.
+   * Avoids setInterval so background browser tabs stay responsive.
    */
   sendState(state) {
     if (!this.enabled) return;
     if (this._latestState) this.stats.dropped++;
     this._latestState = state;
+
+    const interval = 1000 / this.hz;
+    const now = performance.now();
+    if (now - this._lastFlushMs >= interval) {
+      this._flush(now);
+    }
   }
 
-  _flush() {
+  _flush(now = performance.now()) {
     if (!this.enabled || !this._latestState) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const state = this._latestState;
     this._latestState = null;
+    this._lastFlushMs = now;
 
     const all = stateToOscMessages(state, { ignoreImu: this.ignoreImu });
     const changed = this._diff(all);

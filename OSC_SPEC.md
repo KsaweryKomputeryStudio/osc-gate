@@ -59,9 +59,9 @@ Sent every HID input report as one OSC **bundle** (immediate time tag).
 | Address | Args | Meaning |
 |---------|------|---------|
 | `/ds/stick/left/x` | f | 0=left, 0.5=center, 1=right |
-| `/ds/stick/left/y` | f | 0=up, 0.5=center, 1=down |
+| `/ds/stick/left/y` | f | 1=up, 0.5=center, 0=down |
 | `/ds/stick/right/x` | f | |
-| `/ds/stick/right/y` | f | |
+| `/ds/stick/right/y` | f | 1=up, 0.5=center, 0=down |
 
 ### Analog triggers — `0..1`
 
