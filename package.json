@@ -8,7 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "gateway": "node gateway/osc-gateway.js",
-    "start": "node gateway/osc-gateway.js"
+    "start": "node gateway/osc-gateway.js",
+    "install:mac": "bash scripts/install.sh",
+    "run:mac": "bash scripts/run.sh",
+    "run:mac:gateway": "bash scripts/run-gateway.sh",
+    "run:mac:dev": "bash scripts/run-dev.sh"
   },
   "dependencies": {
     "osc": "^2.4.5",
