@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DualSense WebHID Tester</title>
+    <title>pad-to-osc</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -11,15 +11,25 @@
       <div class="logo">
         <div class="logo-icon">DS</div>
         <div>
-          <h1>DualSense WebHID Tester</h1>
-          <p>PS5 controller — full input &amp; output testing</p>
+          <h1>pad-to-osc</h1>
+          <p>DualSense → OSC</p>
         </div>
       </div>
       <div class="header-actions">
-        <button id="osc-config-open" type="button" title="OSC output destination">
-          OSC
-          <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:9000</span>
-        </button>
+        <div class="osc-header-controls">
+          <button
+            id="osc-stream-btn"
+            type="button"
+            class="osc-stream-btn"
+            title="Click to start / stop OSC streaming"
+          >
+            <span class="osc-status-dot" id="osc-header-dot"></span>
+            <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:9000</span>
+          </button>
+          <button id="osc-config-open" type="button" class="osc-settings-btn" title="OSC settings" aria-label="OSC settings">
+            Edit
+          </button>
+        </div>
         <div class="status-pill">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">Disconnected</span>
@@ -92,7 +102,7 @@
         <h2>No controller connected</h2>
         <p>
           Plug in your DualSense via USB or pair over Bluetooth, then click Connect.<br />
-          You'll be prompted to select "Wireless Controller" in the browser dialog.
+          Click the OSC IP button in the header to start streaming once the gateway is running.
         </p>
         <button id="connect-btn-2" class="primary" onclick="document.getElementById('connect-btn').click()">
           Connect Controller

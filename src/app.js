@@ -15,6 +15,8 @@ let motionHistory = { gyroX: [], gyroY: [], gyroZ: [] };
 const HISTORY_LEN = 120;
 
 let oscBridge = null;
+let oscWantStream = false;
+let oscGwConnected = false;
 
 const stickCanvases = {
   left: { canvas: $('#stick-left'), ctx: null },
@@ -50,7 +52,14 @@ function loadOscConfig() {
   try {
     const raw = localStorage.getItem(OSC_STORAGE_KEY);
     if (!raw) {
-      return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: true };
+      return {
+        host: '127.0.0.1',
+        port: 9000,
+        wsUrl: 'ws://127.0.0.1:8081',
+        hz: 60,
+        ignoreImu: true,
+        streaming: false,
+      };
     }
     const parsed = JSON.parse(raw);
     return {
@@ -58,24 +67,38 @@ function loadOscConfig() {
       port: Number(parsed.port) || 9000,
       wsUrl: parsed.wsUrl || 'ws://127.0.0.1:8081',
       hz: Number(parsed.hz) || 60,
-      ignoreImu: parsed.ignoreImu != null ? !!parsed.ignoreImu : parsed.ignoreAccel != null ? !!parsed.ignoreAccel : true,
+      ignoreImu:
+        parsed.ignoreImu != null
+          ? !!parsed.ignoreImu
+          : parsed.ignoreAccel != null
+            ? !!parsed.ignoreAccel
+            : true,
+      streaming: !!parsed.streaming,
     };
   } catch {
-    return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: true };
+    return {
+      host: '127.0.0.1',
+      port: 9000,
+      wsUrl: 'ws://127.0.0.1:8081',
+      hz: 60,
+      ignoreImu: true,
+      streaming: false,
+    };
   }
 }
 
-function saveOscConfig({ host, port, wsUrl, hz, ignoreImu }) {
-  localStorage.setItem(
-    OSC_STORAGE_KEY,
-    JSON.stringify({
-      host,
-      port: Number(port),
-      wsUrl: wsUrl || $('#osc-ws-url')?.value || 'ws://127.0.0.1:8081',
-      hz: Number(hz) || 60,
-      ignoreImu: !!ignoreImu,
-    }),
-  );
+function saveOscConfig(partial = {}) {
+  const current = loadOscConfig();
+  const next = {
+    host: partial.host ?? current.host,
+    port: Number(partial.port ?? current.port),
+    wsUrl: partial.wsUrl ?? $('#osc-ws-url')?.value ?? current.wsUrl,
+    hz: Number(partial.hz ?? $('#osc-modal-hz')?.value ?? current.hz) || 60,
+    ignoreImu: partial.ignoreImu != null ? !!partial.ignoreImu : getOscIgnoreImu(),
+    streaming: partial.streaming != null ? !!partial.streaming : oscWantStream,
+  };
+  localStorage.setItem(OSC_STORAGE_KEY, JSON.stringify(next));
+  return next;
 }
 
 function getOscIgnoreImu() {
@@ -95,6 +118,7 @@ function applyOscOptions() {
     wsUrl: $('#osc-ws-url')?.value,
     hz,
     ignoreImu,
+    streaming: oscWantStream,
   });
   oscBridge?.setIgnoreImu(ignoreImu);
   oscBridge?.setHz(hz);
@@ -103,7 +127,6 @@ function applyOscOptions() {
 
 function isValidHost(host) {
   if (!host || host.length > 253) return false;
-  // IPv4, hostname, or localhost
   return /^(?:(?:\d{1,3}\.){3}\d{1,3}|[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/.test(
     host,
   );
@@ -164,7 +187,7 @@ function applyOscDestination(host, port) {
 
   if (err) err.classList.add('hidden');
   setOscDestinationFields(h, p);
-  saveOscConfig({ host: h, port: p, wsUrl: $('#osc-ws-url')?.value, hz, ignoreImu: getOscIgnoreImu() });
+  saveOscConfig({ host: h, port: p, hz, ignoreImu: getOscIgnoreImu(), streaming: oscWantStream });
   oscBridge?.setDestination(h, p);
   applyOscOptions();
   return true;
@@ -182,13 +205,103 @@ function closeOscConfigModal() {
   $('#osc-config-modal')?.classList.add('hidden');
 }
 
+function updateOscHeaderButton() {
+  const btn = $('#osc-stream-btn');
+  const dot = $('#osc-header-dot');
+  if (!btn || !dot) return;
+
+  const live = oscWantStream && oscGwConnected;
+  const connecting = oscWantStream && !oscGwConnected;
+
+  btn.classList.toggle('active', live);
+  btn.classList.toggle('connecting', connecting);
+  dot.classList.toggle('connected', live);
+  dot.classList.toggle('connecting', connecting);
+
+  btn.title = live
+    ? 'OSC streaming — click to stop'
+    : connecting
+      ? 'Connecting to gateway… click to cancel'
+      : 'Click to start OSC streaming';
+}
+
+function startOscStreaming() {
+  const saved = loadOscConfig();
+  const url = ($('#osc-ws-url')?.value || saved.wsUrl || 'ws://127.0.0.1:8081').trim();
+  oscWantStream = true;
+  saveOscConfig({ streaming: true, wsUrl: url });
+
+  if (oscBridge) {
+    oscBridge.disconnect();
+    oscBridge = null;
+  }
+
+  oscBridge = new OscBridge({
+    wsUrl: url,
+    hz: Number($('#osc-modal-hz')?.value || saved.hz || 60),
+    onStatus: updateOscStatus,
+    onControl: (address, args) => {
+      const handled = applyOscControl(controller, address, args);
+      const argStr = args.map((a) => (typeof a === 'object' ? a.value : a)).join(' ');
+      if ($('#osc-last')) {
+        $('#osc-last').textContent = handled
+          ? `${address} ${argStr}`
+          : `${address} (unhandled)`;
+      }
+      if (handled) syncOutputUiFromController();
+    },
+  });
+
+  const { host, port } = getOscDestination();
+  const hz = Number($('#osc-modal-hz')?.value || 60);
+  oscBridge.setDestination(host, port);
+  oscBridge.setHz(hz);
+  oscBridge.setIgnoreImu(getOscIgnoreImu());
+  oscBridge.connect();
+  oscBridge.setEnabled(true);
+
+  if ($('#osc-enable')) {
+    $('#osc-enable').checked = true;
+    $('#osc-enable').disabled = false;
+  }
+  if ($('#osc-disconnect-btn')) $('#osc-disconnect-btn').disabled = false;
+  if ($('#osc-connect-btn')) $('#osc-connect-btn').disabled = true;
+
+  updateOscHeaderButton();
+}
+
+function stopOscStreaming() {
+  oscWantStream = false;
+  saveOscConfig({ streaming: false });
+  oscBridge?.setEnabled(false);
+  oscBridge?.disconnect();
+  oscBridge = null;
+  oscGwConnected = false;
+
+  if ($('#osc-enable')) {
+    $('#osc-enable').checked = false;
+    $('#osc-enable').disabled = true;
+  }
+  if ($('#osc-disconnect-btn')) $('#osc-disconnect-btn').disabled = true;
+  if ($('#osc-connect-btn')) $('#osc-connect-btn').disabled = false;
+
+  updateOscStatus({ connected: false, enabled: false });
+}
+
+function toggleOscStreaming() {
+  if (oscWantStream) stopOscStreaming();
+  else startOscStreaming();
+}
+
 function setupOscUi() {
   const saved = loadOscConfig();
   setOscDestinationFields(saved.host, saved.port);
   if ($('#osc-ws-url')) $('#osc-ws-url').value = saved.wsUrl;
   if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(saved.hz || 60);
   syncOscIgnoreImuCheckboxes(saved.ignoreImu);
+  updateOscHeaderButton();
 
+  $('#osc-stream-btn')?.addEventListener('click', toggleOscStreaming);
   $('#osc-config-open')?.addEventListener('click', openOscConfigModal);
   $('#osc-config-open-tab')?.addEventListener('click', openOscConfigModal);
 
@@ -232,68 +345,49 @@ function setupOscUi() {
     if (e.key === 'Enter') $('#osc-modal-apply')?.click();
   });
 
-  $('#osc-connect-btn').addEventListener('click', () => {
-    const url = $('#osc-ws-url').value.trim() || 'ws://127.0.0.1:8081';
-    if (oscBridge) oscBridge.disconnect();
+  $('#osc-connect-btn')?.addEventListener('click', () => startOscStreaming());
+  $('#osc-disconnect-btn')?.addEventListener('click', () => stopOscStreaming());
 
-    oscBridge = new OscBridge({
-      wsUrl: url,
-      hz: Number($('#osc-modal-hz')?.value || saved.hz || 60),
-      onStatus: updateOscStatus,
-      onControl: (address, args) => {
-        const handled = applyOscControl(controller, address, args);
-        const argStr = args.map((a) => (typeof a === 'object' ? a.value : a)).join(' ');
-        $('#osc-last').textContent = handled
-          ? `${address} ${argStr}`
-          : `${address} (unhandled)`;
-        if (handled) syncOutputUiFromController();
-      },
-    });
-
-    const { host, port } = getOscDestination();
-    const hz = Number($('#osc-modal-hz')?.value || 60);
-    saveOscConfig({ host, port, wsUrl: url, hz, ignoreImu: getOscIgnoreImu() });
-    oscBridge.setDestination(host, port);
-    oscBridge.setHz(hz);
-    oscBridge.setIgnoreImu(getOscIgnoreImu());
-    oscBridge.connect();
-    $('#osc-enable').disabled = false;
-    $('#osc-disconnect-btn').disabled = false;
-    $('#osc-connect-btn').disabled = true;
-  });
-
-  $('#osc-disconnect-btn').addEventListener('click', () => {
-    oscBridge?.disconnect();
-    oscBridge = null;
-    $('#osc-enable').checked = false;
-    $('#osc-enable').disabled = true;
-    $('#osc-disconnect-btn').disabled = true;
-    $('#osc-connect-btn').disabled = false;
-    updateOscStatus({ connected: false, enabled: false });
-  });
-
-  $('#osc-enable').addEventListener('change', (e) => {
-    oscBridge?.setEnabled(e.target.checked);
+  $('#osc-enable')?.addEventListener('change', (e) => {
+    if (e.target.checked) startOscStreaming();
+    else {
+      oscBridge?.setEnabled(false);
+      oscWantStream = false;
+      saveOscConfig({ streaming: false });
+      updateOscHeaderButton();
+    }
   });
 
   setInterval(() => {
     if (!oscBridge) return;
-    $('#osc-sent').textContent = String(oscBridge.stats.sentBundles);
-    $('#osc-recv').textContent = String(oscBridge.stats.recvMessages);
+    if ($('#osc-sent')) $('#osc-sent').textContent = String(oscBridge.stats.sentBundles);
+    if ($('#osc-recv')) $('#osc-recv').textContent = String(oscBridge.stats.recvMessages);
   }, 500);
+
+  if (saved.streaming) {
+    setTimeout(() => startOscStreaming(), 150);
+  }
 }
 
 function updateOscStatus({ connected, enabled, oscIn, error }) {
+  oscGwConnected = !!connected;
+
   const parts = [];
   if (error) parts.push(`error: ${error}`);
   else parts.push(connected ? 'online' : 'offline');
-  if (enabled) parts.push('streaming');
-  $('#osc-status').textContent = parts.join(' · ');
-  if (oscIn?.port) {
+  if (enabled || oscWantStream) parts.push(enabled ? 'streaming' : 'connecting');
+  if ($('#osc-status')) $('#osc-status').textContent = parts.join(' · ');
+  if (oscIn?.port && $('#osc-in-port')) {
     $('#osc-in-port').textContent = `udp://0.0.0.0:${oscIn.port}`;
   }
   const { host, port } = getOscDestination();
   updateOscDestLabel(host, port);
+  updateOscHeaderButton();
+
+  if (connected && oscWantStream && oscBridge && !oscBridge.enabled) {
+    oscBridge.setEnabled(true);
+    if ($('#osc-enable')) $('#osc-enable').checked = true;
+  }
 }
 
 function syncOutputUiFromController() {
