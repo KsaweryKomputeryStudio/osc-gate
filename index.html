@@ -56,6 +56,11 @@
             <input type="number" id="osc-modal-hz" class="text-input" min="1" max="120" value="60" />
           </div>
 
+          <label class="osc-toggle control-group">
+            <input type="checkbox" id="osc-modal-ignore-accel" />
+            Ignore accelerometer data
+          </label>
+
           <div class="control-group">
             <label>Quick presets</label>
             <div class="preset-grid osc-presets">
@@ -369,6 +374,11 @@
                 <label class="osc-toggle">
                   <input type="checkbox" id="osc-enable" disabled />
                   Stream OSC (send all signals)
+                </label>
+
+                <label class="osc-toggle" style="margin-top: 0.5rem">
+                  <input type="checkbox" id="osc-ignore-accel" />
+                  Ignore accelerometer data
                 </label>
 
                 <div class="device-info" style="margin-top: 1rem">

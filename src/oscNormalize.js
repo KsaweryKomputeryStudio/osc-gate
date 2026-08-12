@@ -51,9 +51,12 @@ export function touchY01(y) {
 
 /**
  * Build a flat list of OSC messages from a parsed DualSense state.
+ * @param {object} state
+ * @param {{ ignoreAccel?: boolean }} [options]
  * @returns {{ address: string, args: number[] }[]}
  */
-export function stateToOscMessages(state) {
+export function stateToOscMessages(state, options = {}) {
+  const { ignoreAccel = false } = options;
   const p = OSC_PREFIX;
   const msgs = [];
   const push = (address, ...args) => msgs.push({ address, args: args.map((a) => Number(a)) });
@@ -140,15 +143,17 @@ export function stateToOscMessages(state) {
     push(`${p}/gyro/z`, 0.5);
   }
 
-  if (state.accel) {
-    push(`${p}/accel/x`, int1601(state.accel.x));
-    push(`${p}/accel/y`, int1601(state.accel.y));
-    push(`${p}/accel/z`, int1601(state.accel.z));
-    push(`${p}/accel`, int1601(state.accel.x), int1601(state.accel.y), int1601(state.accel.z));
-  } else {
-    push(`${p}/accel/x`, 0.5);
-    push(`${p}/accel/y`, 0.5);
-    push(`${p}/accel/z`, 0.5);
+  if (!ignoreAccel) {
+    if (state.accel) {
+      push(`${p}/accel/x`, int1601(state.accel.x));
+      push(`${p}/accel/y`, int1601(state.accel.y));
+      push(`${p}/accel/z`, int1601(state.accel.z));
+      push(`${p}/accel`, int1601(state.accel.x), int1601(state.accel.y), int1601(state.accel.z));
+    } else {
+      push(`${p}/accel/x`, 0.5);
+      push(`${p}/accel/y`, 0.5);
+      push(`${p}/accel/z`, 0.5);
+    }
   }
 
   // --- adaptive trigger feedback ---

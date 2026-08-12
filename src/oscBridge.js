@@ -29,6 +29,7 @@ export class OscBridge {
     this._latestState = null;
     this._flushTimer = null;
     this._lastSent = new Map();
+    this.ignoreAccel = false;
     this.stats = { sentBundles: 0, recvMessages: 0, dropped: 0 };
   }
 
@@ -41,6 +42,13 @@ export class OscBridge {
   setHz(hz) {
     this.hz = Math.max(1, Math.min(250, Number(hz) || DEFAULT_HZ));
     if (this.enabled) this._restartFlush();
+  }
+
+  setIgnoreAccel(on) {
+    this.ignoreAccel = !!on;
+    for (const key of [...this._lastSent.keys()]) {
+      if (key.startsWith('/ds/accel')) this._lastSent.delete(key);
+    }
   }
 
   connect() {
@@ -178,7 +186,7 @@ export class OscBridge {
     const state = this._latestState;
     this._latestState = null;
 
-    const all = stateToOscMessages(state);
+    const all = stateToOscMessages(state, { ignoreAccel: this.ignoreAccel });
     const changed = this._diff(all);
     if (!changed.length) return;
 
