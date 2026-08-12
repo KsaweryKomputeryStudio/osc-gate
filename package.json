@@ -1,0 +1,20 @@
+{
+  "name": "dualsense-webhid-tester",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "gateway": "node gateway/osc-gateway.js",
+    "start": "node gateway/osc-gateway.js"
+  },
+  "dependencies": {
+    "osc": "^2.4.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

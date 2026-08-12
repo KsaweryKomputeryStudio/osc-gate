@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DualSense WebHID Tester</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">
+        <div class="logo-icon">DS</div>
+        <div>
+          <h1>DualSense WebHID Tester</h1>
+          <p>PS5 controller — full input &amp; output testing</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="osc-config-open" type="button" title="OSC output destination">
+          OSC
+          <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:9000</span>
+        </button>
+        <div class="status-pill">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">Disconnected</span>
+        </div>
+        <button id="connect-btn" class="primary">Connect Controller</button>
+        <button id="disconnect-btn" disabled>Disconnect</button>
+      </div>
+    </header>
+
+    <div id="osc-config-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="osc-modal-title">
+      <div class="modal-backdrop" data-close-osc-modal></div>
+      <div class="modal-panel">
+        <div class="modal-header">
+          <h2 id="osc-modal-title">OSC Configuration</h2>
+          <button type="button" class="modal-close" data-close-osc-modal aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="osc-hint">
+            Choose where controller signals are sent (UDP). All values are floats 0–1.
+            Gateway must be running (<code>npm run gateway</code>).
+          </p>
+
+          <div class="control-group">
+            <label for="osc-modal-host">Out IP</label>
+            <input type="text" id="osc-modal-host" class="text-input" placeholder="127.0.0.1" autocomplete="off" />
+          </div>
+          <div class="control-group">
+            <label for="osc-modal-port">Out Port</label>
+            <input type="number" id="osc-modal-port" class="text-input" min="1" max="65535" placeholder="9000" />
+          </div>
+
+          <div class="control-group">
+            <label for="osc-modal-hz">Send rate (Hz)</label>
+            <input type="number" id="osc-modal-hz" class="text-input" min="1" max="120" value="60" />
+          </div>
+
+          <div class="control-group">
+            <label>Quick presets</label>
+            <div class="preset-grid osc-presets">
+              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:57121">localhost:57121</button>
+              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:9000">localhost:9000</button>
+              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:8000">localhost:8000</button>
+              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:7000">localhost:7000</button>
+            </div>
+          </div>
+
+          <div class="osc-modal-target">
+            Target: <code id="osc-modal-preview">udp://127.0.0.1:9000</code>
+          </div>
+          <p id="osc-modal-error" class="osc-modal-error hidden"></p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" data-close-osc-modal>Cancel</button>
+          <button type="button" id="osc-modal-apply" class="primary">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <main>
+      <div id="webhid-warning" class="warning-banner hidden">
+        WebHID is not available in this browser. Use Chrome or Edge on desktop (Windows, macOS, Linux).
+      </div>
+
+      <div id="disconnected-view" class="disconnected-overlay">
+        <h2>No controller connected</h2>
+        <p>
+          Plug in your DualSense via USB or pair over Bluetooth, then click Connect.<br />
+          You'll be prompted to select "Wireless Controller" in the browser dialog.
+        </p>
+        <button id="connect-btn-2" class="primary" onclick="document.getElementById('connect-btn').click()">
+          Connect Controller
+        </button>
+      </div>
+
+      <div id="main-content" class="hidden">
+        <div class="stats-row">
+          <div class="stat">
+            <div class="stat-value" id="report-rate">0</div>
+            <div class="stat-label">Reports / sec</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="report-id">—</div>
+            <div class="stat-label">Report ID</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="battery-level">—</div>
+            <div class="stat-label">Battery</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="battery-status">—</div>
+            <div class="stat-label">Power</div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="input-section">
+            <div class="panel">
+              <h2>Buttons &amp; Sticks</h2>
+              <div class="controller-wrap">
+                <svg class="controller-svg" viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg">
+                  <!-- Body outline -->
+                  <path
+                    d="M350 20 C200 20 80 60 50 140 C30 200 60 280 120 300 C180 310 250 280 350 290 C450 280 520 310 580 300 C640 280 670 200 650 140 C620 60 500 20 350 20 Z"
+                    fill="#1a1f2a"
+                    stroke="#2a3142"
+                    stroke-width="2"
+                  />
+
+                  <!-- D-Pad -->
+                  <rect id="btn-dpad-up" class="btn-indicator" x="155" y="95" width="24" height="24" rx="4" />
+                  <rect id="btn-dpad-down" class="btn-indicator" x="155" y="143" width="24" height="24" rx="4" />
+                  <rect id="btn-dpad-left" class="btn-indicator" x="131" y="119" width="24" height="24" rx="4" />
+                  <rect id="btn-dpad-right" class="btn-indicator" x="179" y="119" width="24" height="24" rx="4" />
+
+                  <!-- Face buttons -->
+                  <circle id="btn-triangle" class="btn-indicator" cx="545" cy="95" r="14" />
+                  <circle id="btn-circle" class="btn-indicator" cx="575" cy="125" r="14" />
+                  <circle id="btn-cross" class="btn-indicator" cx="545" cy="155" r="14" />
+                  <circle id="btn-square" class="btn-indicator" cx="515" cy="125" r="14" />
+
+                  <!-- Shoulder -->
+                  <rect id="btn-l1" class="btn-indicator" x="120" y="45" width="50" height="22" rx="6" />
+                  <rect id="btn-r1" class="btn-indicator" x="530" y="45" width="50" height="22" rx="6" />
+
+                  <!-- Sticks -->
+                  <circle cx="220" cy="175" r="40" fill="#0d1017" stroke="#2a3142" stroke-width="2" />
+                  <circle cx="480" cy="195" r="40" fill="#0d1017" stroke="#2a3142" stroke-width="2" />
+
+                  <!-- Center buttons -->
+                  <rect id="btn-create" class="btn-indicator" x="295" y="130" width="36" height="14" rx="4" />
+                  <rect id="btn-options" class="btn-indicator" x="369" y="130" width="36" height="14" rx="4" />
+                  <circle id="btn-ps" class="btn-indicator" cx="350" cy="155" r="12" />
+                  <rect id="btn-mute" class="btn-indicator" x="338" y="175" width="24" height="14" rx="4" />
+
+                  <!-- Stick clicks -->
+                  <circle id="btn-l3" class="btn-indicator" cx="220" cy="175" r="10" />
+                  <circle id="btn-r3" class="btn-indicator" cx="480" cy="195" r="10" />
+
+                  <!-- Touchpad -->
+                  <rect id="btn-touchpad" class="btn-indicator" x="280" y="95" width="140" height="55" rx="8" />
+
+                  <!-- Labels -->
+                  <text x="145" y="88" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">L1</text>
+                  <text x="555" y="88" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">R1</text>
+                  <text x="200" y="240" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">L Stick</text>
+                  <text x="455" y="255" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">R Stick</text>
+                </svg>
+              </div>
+
+              <div class="sticks-row">
+                <div class="stick-panel">
+                  <h3>Left Stick</h3>
+                  <canvas class="stick-canvas" id="stick-left"></canvas>
+                  <div class="stick-values">
+                    <span>X: <span id="stick-lx">0.000</span></span>
+                    <span>Y: <span id="stick-ly">0.000</span></span>
+                  </div>
+                </div>
+                <div class="stick-panel">
+                  <h3>Right Stick</h3>
+                  <canvas class="stick-canvas" id="stick-right"></canvas>
+                  <div class="stick-values">
+                    <span>X: <span id="stick-rx">0.000</span></span>
+                    <span>Y: <span id="stick-ry">0.000</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h2>Analog Triggers (L2 / R2)</h2>
+              <div class="trigger-bar-wrap">
+                <div class="trigger-label">
+                  <span>L2</span>
+                  <span id="trigger-l2-value">0%</span>
+                </div>
+                <div class="trigger-bar">
+                  <div class="trigger-fill" id="trigger-l2-fill"></div>
+                </div>
+              </div>
+              <div class="trigger-bar-wrap">
+                <div class="trigger-label">
+                  <span>R2</span>
+                  <span id="trigger-r2-value">0%</span>
+                </div>
+                <div class="trigger-bar">
+                  <div class="trigger-fill" id="trigger-r2-fill"></div>
+                </div>
+              </div>
+              <div id="adaptive-section" class="hidden">
+                <h2 style="margin-top: 1rem">Adaptive Trigger Feedback</h2>
+                <p style="font-size: 0.85rem; color: var(--muted)">
+                  L2: <span id="l2-adaptive">—</span><br />
+                  R2: <span id="r2-adaptive">—</span>
+                </p>
+              </div>
+            </div>
+
+            <div class="panel touchpad-wrap">
+              <h2>Touchpad</h2>
+              <canvas id="touchpad-canvas"></canvas>
+              <div class="touch-info">
+                <span id="touch0-info">Touch 1: —</span>
+                <span id="touch1-info">Touch 2: —</span>
+              </div>
+            </div>
+
+            <div class="panel" id="motion-section">
+              <h2>Motion Sensors</h2>
+              <div class="motion-grid">
+                <div class="motion-item">
+                  <label>Gyro X</label>
+                  <span id="gyro-x">0</span>
+                </div>
+                <div class="motion-item">
+                  <label>Gyro Y</label>
+                  <span id="gyro-y">0</span>
+                </div>
+                <div class="motion-item">
+                  <label>Gyro Z</label>
+                  <span id="gyro-z">0</span>
+                </div>
+                <div class="motion-item">
+                  <label>Accel X</label>
+                  <span id="accel-x">0</span>
+                </div>
+                <div class="motion-item">
+                  <label>Accel Y</label>
+                  <span id="accel-y">0</span>
+                </div>
+                <div class="motion-item">
+                  <label>Accel Z</label>
+                  <span id="accel-z">0</span>
+                </div>
+              </div>
+              <canvas class="motion-chart" id="motion-chart"></canvas>
+              <p style="font-size: 0.75rem; color: var(--muted); margin-top: 0.5rem">
+                Sensor timestamp: <span id="sensor-ts">—</span>
+              </p>
+            </div>
+          </div>
+
+          <div class="output-section">
+            <div class="panel">
+              <h2>Device Info</h2>
+              <div class="device-info">
+                <div><strong>Name:</strong> <span id="device-name">—</span></div>
+                <div><strong>VID:PID:</strong> <span id="device-vidpid">—</span></div>
+                <div><strong>Connection:</strong> <span id="device-connection">—</span></div>
+              </div>
+              <div id="battery-section" class="hidden" style="margin-top: 1rem">
+                <div class="battery-bar">
+                  <div class="battery-fill" id="battery-fill" style="width: 0%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="tabs">
+                <button class="tab active" data-tab="output">Output</button>
+                <button class="tab" data-tab="osc">OSC</button>
+                <button class="tab" data-tab="debug">Debug</button>
+              </div>
+
+              <div id="tab-output">
+                <h2>Lightbar</h2>
+                <div class="control-group">
+                  <div class="color-preview" id="color-preview"></div>
+                  <input type="color" id="lightbar-color" value="#0050ff" />
+                </div>
+
+                <h2>Player LEDs</h2>
+                <div class="player-leds control-group">
+                  <button class="led-btn active" data-led="1">1</button>
+                  <button class="led-btn" data-led="2">2</button>
+                  <button class="led-btn active" data-led="3">3</button>
+                  <button class="led-btn" data-led="4">4</button>
+                  <button class="led-btn" data-led="5">5</button>
+                </div>
+
+                <h2>Mute LED</h2>
+                <label>
+                  <input type="checkbox" id="mute-led" /> Mute indicator on
+                </label>
+
+                <h2 style="margin-top: 1rem">Rumble Motors</h2>
+                <div class="control-group">
+                  <label>Left motor</label>
+                  <input type="range" id="rumble-left-slider" min="0" max="255" value="0" />
+                </div>
+                <div class="control-group">
+                  <label>Right motor</label>
+                  <input type="range" id="rumble-right-slider" min="0" max="255" value="0" />
+                </div>
+                <div class="rumble-test">
+                  <button id="rumble-left">Pulse Left</button>
+                  <button id="rumble-right">Pulse Right</button>
+                  <button id="rumble-both">Pulse Both</button>
+                  <button id="rumble-stop">Stop</button>
+                </div>
+
+                <h2 style="margin-top: 1rem">L2 Adaptive Trigger</h2>
+                <div class="preset-grid">
+                  <button class="preset-btn active" data-side="l2" data-preset="off">Off</button>
+                  <button class="preset-btn" data-side="l2" data-preset="rigid">Rigid</button>
+                  <button class="preset-btn" data-side="l2" data-preset="pulse">Pulse</button>
+                  <button class="preset-btn" data-side="l2" data-preset="vibration">Vibration</button>
+                </div>
+
+                <h2 style="margin-top: 1rem">R2 Adaptive Trigger</h2>
+                <div class="preset-grid">
+                  <button class="preset-btn active" data-side="r2" data-preset="off">Off</button>
+                  <button class="preset-btn" data-side="r2" data-preset="rigid">Rigid</button>
+                  <button class="preset-btn" data-side="r2" data-preset="pulse">Pulse</button>
+                  <button class="preset-btn" data-side="r2" data-preset="vibration">Vibration</button>
+                </div>
+              </div>
+
+              <div id="tab-osc" class="hidden">
+                <h2>OSC Gateway</h2>
+                <p class="osc-hint">
+                  Run <code>npm run gateway</code>, then stream all DualSense signals as floats 0–1.
+                  See <code>OSC_SPEC.md</code> for the full address list.
+                </p>
+
+                <div class="control-group">
+                  <label>Output destination</label>
+                  <div class="osc-row" style="grid-template-columns: 1fr auto;">
+                    <input type="text" id="osc-dest-display" class="text-input" readonly value="udp://127.0.0.1:9000" />
+                    <button type="button" id="osc-config-open-tab">Edit…</button>
+                  </div>
+                </div>
+
+                <div class="control-group">
+                  <label>Gateway WebSocket</label>
+                  <input type="text" id="osc-ws-url" value="ws://127.0.0.1:8081" class="text-input" />
+                </div>
+                <!-- Hidden mirrors kept in sync with the config modal -->
+                <input type="hidden" id="osc-out-host" value="127.0.0.1" />
+                <input type="hidden" id="osc-out-port" value="9000" />
+
+                <div class="rumble-test" style="margin-bottom: 0.75rem">
+                  <button id="osc-connect-btn" class="primary">Connect gateway</button>
+                  <button id="osc-disconnect-btn" disabled>Disconnect</button>
+                </div>
+
+                <label class="osc-toggle">
+                  <input type="checkbox" id="osc-enable" disabled />
+                  Stream OSC (send all signals)
+                </label>
+
+                <div class="device-info" style="margin-top: 1rem">
+                  <div><strong>Gateway:</strong> <span id="osc-status">offline</span></div>
+                  <div><strong>Listen (in):</strong> <span id="osc-in-port">udp://0.0.0.0:9001</span></div>
+                  <div><strong>Bundles sent:</strong> <span id="osc-sent">0</span></div>
+                  <div><strong>Controls recv:</strong> <span id="osc-recv">0</span></div>
+                  <div><strong>Last OSC in:</strong> <span id="osc-last">—</span></div>
+                </div>
+              </div>
+
+              <div id="tab-debug" class="hidden">
+                <h2>Raw Input Report</h2>
+                <textarea id="raw-hex" readonly placeholder="Connect and press buttons…"></textarea>
+
+                <h2 style="margin-top: 1rem">Feature Reports</h2>
+                <div class="rumble-test" style="margin-bottom: 0.75rem">
+                  <button id="read-feature-20">Firmware 0x20</button>
+                  <button id="read-feature-22">Hardware 0x22</button>
+                  <button id="read-feature-05">Calibration 0x05</button>
+                </div>
+                <div class="feature-result" id="feature-result">Click a button to read feature report…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>
