@@ -52,11 +52,11 @@ export function touchY01(y) {
 /**
  * Build a flat list of OSC messages from a parsed DualSense state.
  * @param {object} state
- * @param {{ ignoreAccel?: boolean }} [options]
+ * @param {{ ignoreImu?: boolean }} [options]
  * @returns {{ address: string, args: number[] }[]}
  */
 export function stateToOscMessages(state, options = {}) {
-  const { ignoreAccel = false } = options;
+  const { ignoreImu = false } = options;
   const p = OSC_PREFIX;
   const msgs = [];
   const push = (address, ...args) => msgs.push({ address, args: args.map((a) => Number(a)) });
@@ -131,19 +131,19 @@ export function stateToOscMessages(state, options = {}) {
     }
   }
 
-  // --- motion ---
-  if (state.gyro) {
-    push(`${p}/gyro/x`, int1601(state.gyro.x));
-    push(`${p}/gyro/y`, int1601(state.gyro.y));
-    push(`${p}/gyro/z`, int1601(state.gyro.z));
-    push(`${p}/gyro`, int1601(state.gyro.x), int1601(state.gyro.y), int1601(state.gyro.z));
-  } else {
-    push(`${p}/gyro/x`, 0.5);
-    push(`${p}/gyro/y`, 0.5);
-    push(`${p}/gyro/z`, 0.5);
-  }
+  // --- motion (gyro + accel = IMU) ---
+  if (!ignoreImu) {
+    if (state.gyro) {
+      push(`${p}/gyro/x`, int1601(state.gyro.x));
+      push(`${p}/gyro/y`, int1601(state.gyro.y));
+      push(`${p}/gyro/z`, int1601(state.gyro.z));
+      push(`${p}/gyro`, int1601(state.gyro.x), int1601(state.gyro.y), int1601(state.gyro.z));
+    } else {
+      push(`${p}/gyro/x`, 0.5);
+      push(`${p}/gyro/y`, 0.5);
+      push(`${p}/gyro/z`, 0.5);
+    }
 
-  if (!ignoreAccel) {
     if (state.accel) {
       push(`${p}/accel/x`, int1601(state.accel.x));
       push(`${p}/accel/y`, int1601(state.accel.y));
@@ -174,8 +174,7 @@ export function stateToOscMessages(state, options = {}) {
 
   // --- meta ---
   push(`${p}/connected`, 1);
-  if (state.sensorTimestamp != null) {
-    // wrap uint32 into 0..1 for consumers that want a phase signal
+  if (!ignoreImu && state.sensorTimestamp != null) {
     push(`${p}/sensor/timestamp`, clamp01((state.sensorTimestamp >>> 0) / 0xffffffff));
   }
 

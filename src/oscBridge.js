@@ -29,7 +29,7 @@ export class OscBridge {
     this._latestState = null;
     this._flushTimer = null;
     this._lastSent = new Map();
-    this.ignoreAccel = false;
+    this.ignoreImu = false;
     this.stats = { sentBundles: 0, recvMessages: 0, dropped: 0 };
   }
 
@@ -44,10 +44,12 @@ export class OscBridge {
     if (this.enabled) this._restartFlush();
   }
 
-  setIgnoreAccel(on) {
-    this.ignoreAccel = !!on;
+  setIgnoreImu(on) {
+    this.ignoreImu = !!on;
     for (const key of [...this._lastSent.keys()]) {
-      if (key.startsWith('/ds/accel')) this._lastSent.delete(key);
+      if (key.startsWith('/ds/gyro') || key.startsWith('/ds/accel') || key === '/ds/sensor/timestamp') {
+        this._lastSent.delete(key);
+      }
     }
   }
 
@@ -186,7 +188,7 @@ export class OscBridge {
     const state = this._latestState;
     this._latestState = null;
 
-    const all = stateToOscMessages(state, { ignoreAccel: this.ignoreAccel });
+    const all = stateToOscMessages(state, { ignoreImu: this.ignoreImu });
     const changed = this._diff(all);
     if (!changed.length) return;
 

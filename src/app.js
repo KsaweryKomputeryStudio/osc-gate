@@ -50,7 +50,7 @@ function loadOscConfig() {
   try {
     const raw = localStorage.getItem(OSC_STORAGE_KEY);
     if (!raw) {
-      return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreAccel: false };
+      return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: false };
     }
     const parsed = JSON.parse(raw);
     return {
@@ -58,14 +58,14 @@ function loadOscConfig() {
       port: Number(parsed.port) || 9000,
       wsUrl: parsed.wsUrl || 'ws://127.0.0.1:8081',
       hz: Number(parsed.hz) || 60,
-      ignoreAccel: !!parsed.ignoreAccel,
+      ignoreImu: !!(parsed.ignoreImu ?? parsed.ignoreAccel),
     };
   } catch {
-    return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreAccel: false };
+    return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: false };
   }
 }
 
-function saveOscConfig({ host, port, wsUrl, hz, ignoreAccel }) {
+function saveOscConfig({ host, port, wsUrl, hz, ignoreImu }) {
   localStorage.setItem(
     OSC_STORAGE_KEY,
     JSON.stringify({
@@ -73,32 +73,32 @@ function saveOscConfig({ host, port, wsUrl, hz, ignoreAccel }) {
       port: Number(port),
       wsUrl: wsUrl || $('#osc-ws-url')?.value || 'ws://127.0.0.1:8081',
       hz: Number(hz) || 60,
-      ignoreAccel: !!ignoreAccel,
+      ignoreImu: !!ignoreImu,
     }),
   );
 }
 
-function getOscIgnoreAccel() {
-  return !!($('#osc-modal-ignore-accel')?.checked || $('#osc-ignore-accel')?.checked);
+function getOscIgnoreImu() {
+  return !!($('#osc-modal-ignore-imu')?.checked || $('#osc-ignore-imu')?.checked);
 }
 
-function syncOscIgnoreAccelCheckboxes(checked) {
-  if ($('#osc-modal-ignore-accel')) $('#osc-modal-ignore-accel').checked = checked;
-  if ($('#osc-ignore-accel')) $('#osc-ignore-accel').checked = checked;
+function syncOscIgnoreImuCheckboxes(checked) {
+  if ($('#osc-modal-ignore-imu')) $('#osc-modal-ignore-imu').checked = checked;
+  if ($('#osc-ignore-imu')) $('#osc-ignore-imu').checked = checked;
 }
 
 function applyOscOptions() {
-  const ignoreAccel = getOscIgnoreAccel();
+  const ignoreImu = getOscIgnoreImu();
   const hz = Number($('#osc-modal-hz')?.value || 60);
   saveOscConfig({
     ...getOscDestination(),
     wsUrl: $('#osc-ws-url')?.value,
     hz,
-    ignoreAccel,
+    ignoreImu,
   });
-  oscBridge?.setIgnoreAccel(ignoreAccel);
+  oscBridge?.setIgnoreImu(ignoreImu);
   oscBridge?.setHz(hz);
-  return ignoreAccel;
+  return ignoreImu;
 }
 
 function isValidHost(host) {
@@ -164,7 +164,7 @@ function applyOscDestination(host, port) {
 
   if (err) err.classList.add('hidden');
   setOscDestinationFields(h, p);
-  saveOscConfig({ host: h, port: p, wsUrl: $('#osc-ws-url')?.value, hz, ignoreAccel: getOscIgnoreAccel() });
+  saveOscConfig({ host: h, port: p, wsUrl: $('#osc-ws-url')?.value, hz, ignoreImu: getOscIgnoreImu() });
   oscBridge?.setDestination(h, p);
   applyOscOptions();
   return true;
@@ -187,17 +187,17 @@ function setupOscUi() {
   setOscDestinationFields(saved.host, saved.port);
   if ($('#osc-ws-url')) $('#osc-ws-url').value = saved.wsUrl;
   if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(saved.hz || 60);
-  syncOscIgnoreAccelCheckboxes(saved.ignoreAccel);
+  syncOscIgnoreImuCheckboxes(saved.ignoreImu);
 
   $('#osc-config-open')?.addEventListener('click', openOscConfigModal);
   $('#osc-config-open-tab')?.addEventListener('click', openOscConfigModal);
 
-  const onIgnoreAccelChange = (e) => {
-    syncOscIgnoreAccelCheckboxes(e.target.checked);
+  const onIgnoreImuChange = (e) => {
+    syncOscIgnoreImuCheckboxes(e.target.checked);
     applyOscOptions();
   };
-  $('#osc-modal-ignore-accel')?.addEventListener('change', onIgnoreAccelChange);
-  $('#osc-ignore-accel')?.addEventListener('change', onIgnoreAccelChange);
+  $('#osc-modal-ignore-imu')?.addEventListener('change', onIgnoreImuChange);
+  $('#osc-ignore-imu')?.addEventListener('change', onIgnoreImuChange);
 
   $$('[data-close-osc-modal]').forEach((el) => {
     el.addEventListener('click', closeOscConfigModal);
@@ -252,10 +252,10 @@ function setupOscUi() {
 
     const { host, port } = getOscDestination();
     const hz = Number($('#osc-modal-hz')?.value || 60);
-    saveOscConfig({ host, port, wsUrl: url, hz, ignoreAccel: getOscIgnoreAccel() });
+    saveOscConfig({ host, port, wsUrl: url, hz, ignoreImu: getOscIgnoreImu() });
     oscBridge.setDestination(host, port);
     oscBridge.setHz(hz);
-    oscBridge.setIgnoreAccel(getOscIgnoreAccel());
+    oscBridge.setIgnoreImu(getOscIgnoreImu());
     oscBridge.connect();
     $('#osc-enable').disabled = false;
     $('#osc-disconnect-btn').disabled = false;
