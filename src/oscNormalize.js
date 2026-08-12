@@ -15,6 +15,13 @@ const TOUCH_H = 1080;
 const INT16_MIN = -32768;
 const INT16_SPAN = 65535;
 
+/** Stick rest deadzone around 0.5 (filters LSB noise when idle). */
+const STICK_DEADZONE = 0.025;
+/** Trigger rest deadzone near 0. */
+const TRIGGER_DEADZONE = 0.02;
+/** Quantize continuous floats to reduce micro-jitter. */
+const QUANT = 1000;
+
 export const OSC_PREFIX = '/ds';
 
 function clamp01(v) {
@@ -26,31 +33,42 @@ function bool01(v) {
   return v ? 1 : 0;
 }
 
-/** Raw HID stick byte 0..255 → 0..1 (0.5 ≈ center) */
-export function stick01(raw) {
-  return clamp01(raw / 0xff);
+function quantize(v) {
+  return Math.round(clamp01(v) * QUANT) / QUANT;
 }
 
-/** Raw trigger byte 0..255 → 0..1 */
+/** Raw HID stick byte 0..255 → 0..1 with center deadzone → 0.5 */
+export function stick01(raw) {
+  let v = clamp01(raw / 0xff);
+  if (Math.abs(v - 0.5) < STICK_DEADZONE) return 0.5;
+  return quantize(v);
+}
+
+/** Raw trigger byte 0..255 → 0..1 with rest deadzone → 0 */
 export function trigger01(raw) {
-  return clamp01(raw / 0xff);
+  let v = clamp01(raw / 0xff);
+  if (v < TRIGGER_DEADZONE) return 0;
+  return quantize(v);
 }
 
 /** Signed int16 → 0..1 */
 export function int1601(v) {
-  return clamp01((v - INT16_MIN) / INT16_SPAN);
+  return quantize(clamp01((v - INT16_MIN) / INT16_SPAN));
 }
 
 export function touchX01(x) {
-  return clamp01(x / (TOUCH_W - 1));
+  return quantize(clamp01(x / (TOUCH_W - 1)));
 }
 
 export function touchY01(y) {
-  return clamp01(y / (TOUCH_H - 1));
+  return quantize(clamp01(y / (TOUCH_H - 1)));
 }
 
 /**
  * Build a flat list of OSC messages from a parsed DualSense state.
+ * Keeps the address set lean (no duplicate compound + component pairs)
+ * so one frame stays small enough for a single UDP OSC bundle.
+ *
  * @param {object} state
  * @param {{ ignoreImu?: boolean }} [options]
  * @returns {{ address: string, args: number[] }[]}
@@ -83,52 +101,34 @@ export function stateToOscMessages(state, options = {}) {
     push(`${p}/dpad/down`, bool01(b.dpad.down));
     push(`${p}/dpad/left`, bool01(b.dpad.left));
     push(`${p}/dpad/right`, bool01(b.dpad.right));
-    // hat as 0..1 (8-way + rest): 0=N … 7=NW, 8=rest → /8
-    push(`${p}/dpad/hat`, clamp01(b.dpad.value / 8));
   }
 
-  // --- sticks ---
+  // --- sticks (components only) ---
   if (state.sticks) {
     push(`${p}/stick/left/x`, stick01(state.sticks.left.x));
     push(`${p}/stick/left/y`, stick01(state.sticks.left.y));
     push(`${p}/stick/right/x`, stick01(state.sticks.right.x));
     push(`${p}/stick/right/y`, stick01(state.sticks.right.y));
-    push(
-      `${p}/stick/left`,
-      stick01(state.sticks.left.x),
-      stick01(state.sticks.left.y),
-    );
-    push(
-      `${p}/stick/right`,
-      stick01(state.sticks.right.x),
-      stick01(state.sticks.right.y),
-    );
   }
 
-  // --- analog triggers (pressure) ---
-  // Use /value so /ds/trigger/l2 stays free for inbound control commands.
+  // --- analog triggers ---
   if (state.triggers) {
     push(`${p}/trigger/l2/value`, trigger01(state.triggers.l2));
     push(`${p}/trigger/r2/value`, trigger01(state.triggers.r2));
   }
 
-  // --- touchpad ---
+  // --- touchpad (only while active, plus active flag) ---
   if (state.touch) {
     state.touch.forEach((t, i) => {
       push(`${p}/touch/${i}/active`, bool01(t.active));
-      push(`${p}/touch/${i}/id`, clamp01(t.id / 127));
-      push(`${p}/touch/${i}/x`, t.active ? touchX01(t.x) : 0);
-      push(`${p}/touch/${i}/y`, t.active ? touchY01(t.y) : 0);
       if (t.active) {
-        push(`${p}/touch/${i}`, touchX01(t.x), touchY01(t.y));
+        push(`${p}/touch/${i}/x`, touchX01(t.x));
+        push(`${p}/touch/${i}/y`, touchY01(t.y));
       }
     });
   } else {
-    for (let i = 0; i < 2; i++) {
-      push(`${p}/touch/${i}/active`, 0);
-      push(`${p}/touch/${i}/x`, 0);
-      push(`${p}/touch/${i}/y`, 0);
-    }
+    push(`${p}/touch/0/active`, 0);
+    push(`${p}/touch/1/active`, 0);
   }
 
   // --- motion (gyro + accel = IMU) ---
@@ -137,46 +137,21 @@ export function stateToOscMessages(state, options = {}) {
       push(`${p}/gyro/x`, int1601(state.gyro.x));
       push(`${p}/gyro/y`, int1601(state.gyro.y));
       push(`${p}/gyro/z`, int1601(state.gyro.z));
-      push(`${p}/gyro`, int1601(state.gyro.x), int1601(state.gyro.y), int1601(state.gyro.z));
-    } else {
-      push(`${p}/gyro/x`, 0.5);
-      push(`${p}/gyro/y`, 0.5);
-      push(`${p}/gyro/z`, 0.5);
     }
-
     if (state.accel) {
       push(`${p}/accel/x`, int1601(state.accel.x));
       push(`${p}/accel/y`, int1601(state.accel.y));
       push(`${p}/accel/z`, int1601(state.accel.z));
-      push(`${p}/accel`, int1601(state.accel.x), int1601(state.accel.y), int1601(state.accel.z));
-    } else {
-      push(`${p}/accel/x`, 0.5);
-      push(`${p}/accel/y`, 0.5);
-      push(`${p}/accel/z`, 0.5);
     }
   }
 
-  // --- adaptive trigger feedback ---
-  if (state.adaptiveTriggers) {
-    const { l2, r2 } = state.adaptiveTriggers;
-    push(`${p}/adaptive/l2/force`, bool01(l2.force));
-    push(`${p}/adaptive/l2/state`, clamp01(l2.state / 15));
-    push(`${p}/adaptive/r2/force`, bool01(r2.force));
-    push(`${p}/adaptive/r2/state`, clamp01(r2.state / 15));
-  }
-
-  // --- battery ---
+  // --- battery (rarely changes) ---
   if (state.battery) {
-    push(`${p}/battery/level`, clamp01(state.battery.level / 100));
+    push(`${p}/battery/level`, quantize(clamp01(state.battery.level / 100)));
     push(`${p}/battery/charging`, bool01(state.battery.charging));
-    push(`${p}/battery/full`, bool01(state.battery.full));
   }
 
-  // --- meta ---
   push(`${p}/connected`, 1);
-  if (!ignoreImu && state.sensorTimestamp != null) {
-    push(`${p}/sensor/timestamp`, clamp01((state.sensorTimestamp >>> 0) / 0xffffffff));
-  }
 
   return msgs;
 }
@@ -241,7 +216,6 @@ export function applyOscControl(controller, address, args) {
   }
 
   if (address === `${p}/playerleds`) {
-    // either one float bitmask 0..1 → 0..31, or five 0/1 args
     if (values.length >= 5) {
       let mask = 0;
       for (let i = 0; i < 5; i++) {
@@ -259,7 +233,6 @@ export function applyOscControl(controller, address, args) {
     return true;
   }
 
-  // Adaptive trigger presets: /ds/trigger/l2/preset "rigid"
   const presetMatch = address.match(/^\/ds\/trigger\/(l2|r2)\/preset$/);
   if (presetMatch) {
     const side = presetMatch[1];
@@ -268,8 +241,6 @@ export function applyOscControl(controller, address, args) {
     return true;
   }
 
-  // Custom effect: /ds/trigger/l2/effect mode p1..p7
-  // mode & params are 0..1 → scaled to 0..255 (mode often small ints; also accept raw if >1)
   const effectMatch = address.match(/^\/ds\/trigger\/(l2|r2)\/effect$/);
   if (effectMatch) {
     const side = effectMatch[1];
@@ -281,7 +252,6 @@ export function applyOscControl(controller, address, args) {
     return true;
   }
 
-  // Shorthand preset on main path: /ds/trigger/l2 "pulse"  OR /ds/trigger/l2 0..1 intensity→rigid strength
   const sideMatch = address.match(/^\/ds\/trigger\/(l2|r2)$/);
   if (sideMatch) {
     const side = sideMatch[1];
@@ -290,7 +260,6 @@ export function applyOscControl(controller, address, args) {
     } else if (f(0) <= 0) {
       controller.setTriggerEffect(side, 'off');
     } else {
-      // strength 0..1 → rigid resistance
       const strength = toByte(f(0));
       controller.setTriggerEffectCustom(side, 0x01, [0x00, strength, 0, 0, 0, 0, 0]);
     }

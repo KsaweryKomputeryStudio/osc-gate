@@ -50,7 +50,7 @@ function loadOscConfig() {
   try {
     const raw = localStorage.getItem(OSC_STORAGE_KEY);
     if (!raw) {
-      return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: false };
+      return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: true };
     }
     const parsed = JSON.parse(raw);
     return {
@@ -58,10 +58,10 @@ function loadOscConfig() {
       port: Number(parsed.port) || 9000,
       wsUrl: parsed.wsUrl || 'ws://127.0.0.1:8081',
       hz: Number(parsed.hz) || 60,
-      ignoreImu: !!(parsed.ignoreImu ?? parsed.ignoreAccel),
+      ignoreImu: parsed.ignoreImu != null ? !!parsed.ignoreImu : parsed.ignoreAccel != null ? !!parsed.ignoreAccel : true,
     };
   } catch {
-    return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: false };
+    return { host: '127.0.0.1', port: 9000, wsUrl: 'ws://127.0.0.1:8081', hz: 60, ignoreImu: true };
   }
 }
 

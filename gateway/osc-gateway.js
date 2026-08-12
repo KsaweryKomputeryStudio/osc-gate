@@ -2,16 +2,17 @@
  * DualSense OSC Gateway
  *
  * Bridges WebHID (browser) ↔ WebSocket ↔ OSC UDP.
- * Browsers cannot send UDP, so this Node process owns OSC I/O.
  *
- * Outbound uses latest-wins coalescing so a slow OSC receiver
- * cannot accumulate latency from a HID flood.
+ * Outbound frames are packed into a single OSC #bundle (one UDP datagram)
+ * so receivers like TouchDesigner Data OSC stay low-latency. Previous
+ * per-address UDP floods (~40 packets/frame) caused queue buildup.
  *
  * Env / CLI:
  *   OSC_OUT_HOST   default 127.0.0.1
- *   OSC_OUT_PORT   default 9000   (send controller → world)
- *   OSC_IN_PORT    default 9001   (receive world → controller)
- *   WS_PORT        default 8081   (browser bridge)
+ *   OSC_OUT_PORT   default 9000
+ *   OSC_IN_PORT    default 9001
+ *   WS_PORT        default 8081
+ *   OSC_DISCRETE=1 send one UDP packet per address (legacy / SuperCollider)
  */
 
 import { WebSocketServer } from 'ws';
@@ -22,11 +23,11 @@ const OSC_OUT_HOST = process.env.OSC_OUT_HOST || '127.0.0.1';
 const OSC_OUT_PORT = Number(process.env.OSC_OUT_PORT || 9000);
 const OSC_IN_PORT = Number(process.env.OSC_IN_PORT || 9001);
 const WS_PORT = Number(process.env.WS_PORT || 8081);
+const OSC_DISCRETE = process.env.OSC_DISCRETE === '1';
 
 /** @type {import('ws').WebSocket | null} */
 let browserClient = null;
 
-/** Live OSC destination (browser can override via WS). */
 let outHost = OSC_OUT_HOST;
 let outPort = OSC_OUT_PORT;
 
@@ -34,7 +35,8 @@ let outPort = OSC_OUT_PORT;
 let pendingMessages = null;
 let flushScheduled = false;
 let packetsSent = 0;
-let packetsDropped = 0;
+let framesSent = 0;
+let framesDropped = 0;
 
 const udpSocket = dgram.createSocket('udp4');
 
@@ -42,12 +44,12 @@ const udpPort = new osc.UDPPort({
   localAddress: '0.0.0.0',
   localPort: OSC_IN_PORT,
   metadata: true,
-  socket: undefined,
 });
 
 udpPort.on('ready', () => {
   console.log(`[OSC] listening (in)  udp://0.0.0.0:${OSC_IN_PORT}`);
   console.log(`[OSC] sending  (out)  udp://${outHost}:${outPort}`);
+  console.log(`[OSC] mode: ${OSC_DISCRETE ? 'discrete messages' : 'bundled (1 UDP / frame)'}`);
 });
 
 udpPort.on('message', (msg, timeTag, info) => {
@@ -72,24 +74,35 @@ udpPort.on('error', (err) => {
 
 udpPort.open();
 
-function encodeMessage(m) {
-  return osc.writePacket({
-    address: m.address,
-    args: (m.args || []).map((v) => {
-      if (typeof v === 'number') return { type: 'f', value: v };
-      if (typeof v === 'string') return { type: 's', value: v };
-      if (typeof v === 'boolean') return { type: 'f', value: v ? 1 : 0 };
-      return { type: 'f', value: Number(v) || 0 };
-    }),
+function toOscArgs(args) {
+  return (args || []).map((v) => {
+    if (typeof v === 'number') return { type: 'f', value: v };
+    if (typeof v === 'string') return { type: 's', value: v };
+    if (typeof v === 'boolean') return { type: 'f', value: v ? 1 : 0 };
+    return { type: 'f', value: Number(v) || 0 };
   });
 }
 
-/**
- * Queue messages with latest-wins: a new frame replaces an unsent one.
- */
+function encodeBundle(messages) {
+  return osc.writePacket({
+    timeTag: osc.timeTag(0),
+    packets: messages.map((m) => ({
+      address: m.address,
+      args: toOscArgs(m.args),
+    })),
+  });
+}
+
+function encodeMessage(m) {
+  return osc.writePacket({
+    address: m.address,
+    args: toOscArgs(m.args),
+  });
+}
+
 function enqueueOscMessages(messages) {
   if (!messages?.length) return;
-  if (pendingMessages) packetsDropped += pendingMessages.length;
+  if (pendingMessages) framesDropped++;
   pendingMessages = messages;
   scheduleFlush();
 }
@@ -106,15 +119,20 @@ function flushPending() {
   pendingMessages = null;
   if (!messages?.length) return;
 
-  for (const m of messages) {
-    try {
-      const buf = Buffer.from(encodeMessage(m));
-      udpSocket.send(buf, outPort, outHost);
+  try {
+    if (OSC_DISCRETE) {
+      for (const m of messages) {
+        udpSocket.send(Buffer.from(encodeMessage(m)), outPort, outHost);
+        packetsSent++;
+      }
+    } else {
+      // One UDP datagram for the whole frame — matches how Data OSC stays responsive
+      udpSocket.send(Buffer.from(encodeBundle(messages)), outPort, outHost);
       packetsSent++;
-    } catch (err) {
-      console.error('[OSC] send failed:', err.message);
-      break;
     }
+    framesSent++;
+  } catch (err) {
+    console.error('[OSC] send failed:', err.message);
   }
 }
 
@@ -126,7 +144,6 @@ const wss = new WebSocketServer({ port: WS_PORT });
 
 wss.on('listening', () => {
   console.log(`[WS]  browser bridge  ws://127.0.0.1:${WS_PORT}`);
-  console.log('[tip] open the Vite app, connect DualSense, enable OSC in the OSC tab');
 });
 
 wss.on('connection', (ws) => {
@@ -139,6 +156,7 @@ wss.on('connection', (ws) => {
       oscOut: { host: outHost, port: outPort },
       oscIn: { port: OSC_IN_PORT },
       wsPort: WS_PORT,
+      discrete: OSC_DISCRETE,
     }),
   );
 
@@ -175,10 +193,13 @@ wss.on('connection', (ws) => {
 });
 
 setInterval(() => {
-  if (packetsSent || packetsDropped) {
-    console.log(`[OSC] sent=${packetsSent}/s dropped_frames≈${packetsDropped}`);
+  if (framesSent || framesDropped || packetsSent) {
+    console.log(
+      `[OSC] frames=${framesSent}/s udp_packets=${packetsSent}/s dropped_frames=${framesDropped}`,
+    );
+    framesSent = 0;
+    framesDropped = 0;
     packetsSent = 0;
-    packetsDropped = 0;
   }
 }, 1000);
 

@@ -54,7 +54,7 @@ Sent every HID input report as one OSC **bundle** (immediate time tag).
 | `/ds/dpad/right` | f | 0\|1 |
 | `/ds/dpad/hat` | f | hat index / 8 (0=N … 7=NW, 1.0≈rest/8) |
 
-### Sticks — `0..1`, center ≈ `0.5`
+### Sticks — `0..1`, center ≈ `0.5` (deadzone applied at rest)
 
 | Address | Args | Meaning |
 |---------|------|---------|
@@ -62,8 +62,6 @@ Sent every HID input report as one OSC **bundle** (immediate time tag).
 | `/ds/stick/left/y` | f | 0=up, 0.5=center, 1=down |
 | `/ds/stick/right/x` | f | |
 | `/ds/stick/right/y` | f | |
-| `/ds/stick/left` | f f | x, y |
-| `/ds/stick/right` | f f | x, y |
 
 ### Analog triggers — `0..1`
 
@@ -72,37 +70,23 @@ Sent every HID input report as one OSC **bundle** (immediate time tag).
 | `/ds/trigger/l2/value` | f (analog pressure) |
 | `/ds/trigger/r2/value` | f (analog pressure) |
 
-> Inbound adaptive-trigger **commands** use `/ds/trigger/l2` and `/ds/trigger/l2/preset` (see below), not `/value`.
-
 ### Touchpad
 
 | Address | Args | Meaning |
 |---------|------|---------|
 | `/ds/touch/0/active` | f | finger 1 down |
-| `/ds/touch/0/id` | f | touch id / 127 |
-| `/ds/touch/0/x` | f | 0..1 across pad width |
-| `/ds/touch/0/y` | f | 0..1 across pad height |
-| `/ds/touch/0` | f f | x, y (only while active) |
+| `/ds/touch/0/x` | f | only while active |
+| `/ds/touch/0/y` | f | only while active |
 | `/ds/touch/1/*` | | same for finger 2 |
 
-### Motion — `0..1` over full int16 (`0.5` ≈ rest)
+### Motion — disabled when **Ignore IMU** is on
 
 | Address | Args |
 |---------|------|
 | `/ds/gyro/x` `/ds/gyro/y` `/ds/gyro/z` | f |
-| `/ds/gyro` | f f f |
 | `/ds/accel/x` `/ds/accel/y` `/ds/accel/z` | f |
-| `/ds/accel` | f f f |
-| `/ds/sensor/timestamp` | f | uint32 wrapped into 0..1 |
 
-### Adaptive trigger feedback (from pad)
-
-| Address | Args |
-|---------|------|
-| `/ds/adaptive/l2/force` | f 0\|1 |
-| `/ds/adaptive/l2/state` | f state/15 |
-| `/ds/adaptive/r2/force` | f |
-| `/ds/adaptive/r2/state` | f |
+> Gyro/accel noise changes every HID report. Leave **Ignore IMU** enabled unless you need motion — otherwise the receiver floods and latency builds.
 
 ### Battery / meta
 
@@ -110,8 +94,9 @@ Sent every HID input report as one OSC **bundle** (immediate time tag).
 |---------|------|
 | `/ds/battery/level` | f 0..1 |
 | `/ds/battery/charging` | f 0\|1 |
-| `/ds/battery/full` | f 0\|1 |
 | `/ds/connected` | f always 1 while streaming |
+
+Gateway packs each frame into **one OSC #bundle UDP packet** (like Data OSC). For discrete per-address packets set `OSC_DISCRETE=1`.
 
 ---
 

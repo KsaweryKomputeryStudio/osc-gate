@@ -1,7 +1,7 @@
 import { stateToOscMessages, applyOscControl } from './oscNormalize.js';
 
 const DEFAULT_HZ = 60;
-const FLOAT_EPS = 0.002;
+const FLOAT_EPS = 0.0005; // matches quantize(1/1000)
 
 /**
  * Browser ↔ OSC gateway WebSocket client.

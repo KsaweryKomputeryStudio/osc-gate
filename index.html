@@ -57,8 +57,8 @@
           </div>
 
           <label class="osc-toggle control-group">
-            <input type="checkbox" id="osc-modal-ignore-imu" />
-            Ignore IMU (gyro + accelerometer)
+            <input type="checkbox" id="osc-modal-ignore-imu" checked />
+            Ignore IMU (gyro + accelerometer) — recommended
           </label>
 
           <div class="control-group">
@@ -377,9 +377,13 @@
                 </label>
 
                 <label class="osc-toggle" style="margin-top: 0.5rem">
-                  <input type="checkbox" id="osc-ignore-imu" />
-                  Ignore IMU (gyro + accelerometer)
+                  <input type="checkbox" id="osc-ignore-imu" checked />
+                  Ignore IMU (gyro + accelerometer) — recommended
                 </label>
+                <p class="osc-hint" style="margin-top: 0.5rem">
+                  With IMU on, gyro noise sends every frame and causes lag. Bundles counter only
+                  increments when values actually change.
+                </p>
 
                 <div class="device-info" style="margin-top: 1rem">
                   <div><strong>Gateway:</strong> <span id="osc-status">offline</span></div>
