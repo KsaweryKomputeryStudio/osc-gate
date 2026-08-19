@@ -1,22 +1,26 @@
-# DualSense OSC Spec
+# osc-gate OSC Spec
 
-All **outbound** values are **floats in `[0.0, 1.0]`**.  
-All **inbound** control floats are also expected in `[0.0, 1.0]` unless noted.
+Multipurpose data → OSC. All **DualSense outbound** values are **floats in `[0.0, 1.0]`**.  
+Garmin HR is **bpm** by default, or **0–1** when Normalize HR is on. Trend is always **0–1**.  
+Inbound DualSense control floats are expected in `[0.0, 1.0]` unless noted.
 
 Architecture:
 
 ```
-DualSense ──WebHID──▶ Browser ──WebSocket──▶ OSC Gateway ──UDP──▶ your app
-                              ◀───────────── OSC Gateway ◀──UDP── your app
+DualSense ──WebHID─────────▶┐
+Garmin HR ──Web Bluetooth──▶┼─ Browser ──WebSocket──▶ OSC Gateway ──UDP──▶ your app
+MacBook  ──WebHID/sensors──▶┘         ◀───────────── OSC Gateway ◀──UDP── your app
 ```
 
 | Role | Default | Env |
 |------|---------|-----|
-| OSC send (controller → world) | `127.0.0.1:9000` | `OSC_OUT_HOST` / `OSC_OUT_PORT` |
-| OSC receive (world → controller) | `0.0.0.0:9001` | `OSC_IN_PORT` |
+| OSC send (browser → world) | `127.0.0.1:57121` (add more in UI) | `OSC_OUT_HOST` / `OSC_OUT_PORT` (first dest until UI connects) |
+| OSC receive (world → browser) | `0.0.0.0:9001` (configurable in UI) | `OSC_IN_PORT` (until UI connects) |
 | WebSocket bridge | `ws://127.0.0.1:8081` | `WS_PORT` |
 
-Address prefix: `/ds`
+Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
+
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors)
 
 ---
 
@@ -100,9 +104,39 @@ Gateway packs each frame into **one OSC #bundle UDP packet** (like Data OSC). Fo
 
 ---
 
+## Garmin HR — `/garmin`
+
+Requires **Broadcast Heart Rate** on the watch (Sensors → Heart Rate → Broadcast) and a BLE connection from the browser. Disconnect Garmin Connect / the phone first.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/garmin/hr` | f | Heart rate. **bpm** by default, or **0–1** if Normalize HR is on (mapped through configurable min/max, default 40–200). |
+| `/garmin/trend` | f | Change over the trend window, **always 0–1**. `0.5` = no change, `0` = falling by the configured ±bpm range, `1` = rising by that range. Window is configurable (default 30 s, range ±20 bpm). Optional **Smooth trend** eases the float toward the window value over a time constant (default 2 s) so it does not jump with each BPM update. |
+| `/garmin/push_beat` | f | Beat trigger: `1` on each beat, then `0` (~40 ms). Uses RR-intervals when the sensor provides them, otherwise a clock from current BPM. |
+
+---
+
+## MacBook sensors — `/mac`
+
+Chrome **WebHID** on this sensor is limited to about **1 Hz**. osc-gate reads the hinge in the **local gateway** with hidapi (same path as the native lid-angle demos) and streams samples to the UI over WebSocket. Keep `./run` going, then Connect MacBook.
+
+Internal accelerometer / gyro (AppleSPU) are usually **not** exposed to the browser (macOS keeps them for the Sensor Processing Unit; native tools need admin). If Chrome or the Generic Sensor API does expose motion or ambient light, those addresses are sent too.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/mac/lid/angle` | f | Hinge angle in **degrees** (~0 closed, ~90 laptop, ~180 flat back). |
+| `/mac/lid/open` | f | `0` closed (below the closed-threshold, default 12°), `1` open. |
+| `/mac/lid/norm` | f | Angle mapped **0–1** through configurable max (default 180°). |
+| `/mac/accel/x` `/mac/accel/y` `/mac/accel/z` | f | Linear acceleration in **g**, only if the browser can see an IMU. |
+| `/mac/gyro/x` `/mac/gyro/y` `/mac/gyro/z` | f | Angular velocity, only if available. |
+| `/mac/als` | f | Ambient light (lux), only if available. |
+
+---
+
 ## Inbound (your app → gateway `:9001` → controller)
 
-Send OSC UDP to the gateway **in** port. Values are floats `0..1` unless noted.
+Send OSC UDP to the gateway **in** port (default **9001**, set in OSC Configuration). Values are floats `0..1` unless noted.
+The bottom **Incoming OSC** dock shows these packets (raw log or compact per-address list + sparkline). New senders are added as sources (`IP:PORT`, rename / delete). Routed destinations receive a **passthrough** copy of the same packet.
 
 ### Haptics / rumble
 
@@ -162,19 +196,18 @@ Send OSC UDP to the gateway **in** port. Values are floats `0..1` unless noted.
 ## Quick start
 
 ```bash
-npm run gateway          # OSC + WebSocket bridge
-npm run dev              # WebHID UI
+./run                    # OSC gateway + web UI
 ```
 
-1. Start gateway, then open `http://localhost:5173`
-2. Connect DualSense
-3. OSC tab → set **Out IP / Port** → **Connect gateway** → enable **Stream OSC**
-4. Listen on `udp://IP:PORT` (default `127.0.0.1:9000`)
-5. Send feedback to `udp://127.0.0.1:9001`
+1. Open `http://localhost:5173`
+2. Header → **Edit** destinations / routing → click the IP to start streaming
+3. Connect DualSense and/or Garmin HR from the left menu
+4. Listen on `udp://IP:PORT` (default `127.0.0.1:57121`)
+5. Send DualSense feedback to `udp://127.0.0.1:9001`
 
 ### Example: TouchDesigner / Max / Resolume
 
-- Listen UDP **9000** for `/ds/...`
+- Listen UDP **57121** for `/ds/...` and `/garmin/...`
 - Send UDP **9001** e.g. `/ds/rumble 0.5 0.2`
 
 ### Example: Python (python-osc)

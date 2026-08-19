@@ -3,17 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>pad-to-osc</title>
+    <meta http-equiv="Permissions-Policy" content="accelerometer=(self), gyroscope=(self), ambient-light-sensor=(self)" />
+    <title>osc-gate</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <header>
+    <div id="perlinBg"></div>
+    <div id="contentVignette"></div>
+    <header class="page-header">
       <div class="logo">
-        <div class="logo-icon">DS</div>
-        <div>
-          <h1>pad-to-osc</h1>
-          <p>DualSense → OSC</p>
-        </div>
+        <h1 class="page-title">osc-gate</h1>
+        <p class="page-kicker">data → OSC</p>
       </div>
       <div class="header-actions">
         <div class="osc-header-controls">
@@ -24,66 +25,58 @@
             title="Click to start / stop OSC streaming"
           >
             <span class="osc-status-dot" id="osc-header-dot"></span>
-            <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:9000</span>
+            <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:57121</span>
           </button>
           <button id="osc-config-open" type="button" class="osc-settings-btn" title="OSC settings" aria-label="OSC settings">
             Edit
           </button>
         </div>
-        <div class="status-pill">
-          <span class="status-dot" id="status-dot"></span>
-          <span id="status-text">Disconnected</span>
-        </div>
-        <button id="connect-btn" class="primary">Connect Controller</button>
-        <button id="disconnect-btn" disabled>Disconnect</button>
       </div>
     </header>
 
     <div id="osc-config-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="osc-modal-title">
       <div class="modal-backdrop" data-close-osc-modal></div>
-      <div class="modal-panel">
+      <div class="modal-panel modal-panel-wide">
         <div class="modal-header">
           <h2 id="osc-modal-title">OSC Configuration</h2>
           <button type="button" class="modal-close" data-close-osc-modal aria-label="Close">×</button>
         </div>
         <div class="modal-body">
           <p class="osc-hint">
-            Choose where controller signals are sent (UDP). All values are floats 0–1.
-            Gateway must be running (<code>npm run gateway</code>).
+            Destinations receive UDP OSC from the gateway. The matrix chooses which source
+            feeds which destination; empty cells default to <strong>on</strong> (all → all).
           </p>
 
           <div class="control-group">
-            <label for="osc-modal-host">Out IP</label>
-            <input type="text" id="osc-modal-host" class="text-input" placeholder="127.0.0.1" autocomplete="off" />
-          </div>
-          <div class="control-group">
-            <label for="osc-modal-port">Out Port</label>
-            <input type="number" id="osc-modal-port" class="text-input" min="1" max="65535" placeholder="9000" />
+            <label for="osc-modal-in-port">OSC input port</label>
+            <input type="number" id="osc-modal-in-port" class="text-input" min="1" max="65535" value="9001" />
+            <p class="osc-hint">Gateway listens here for inbound UDP (controller feedback + incoming monitor).</p>
           </div>
 
           <div class="control-group">
-            <label for="osc-modal-hz">Send rate (Hz)</label>
+            <label>Destinations</label>
+            <div id="osc-dest-list" class="osc-dest-list"></div>
+            <button type="button" id="osc-dest-add">Add destination</button>
+          </div>
+
+          <div class="control-group">
+            <label>Routing matrix</label>
+            <div class="osc-matrix-wrap">
+              <table class="osc-matrix" id="osc-routing-matrix"></table>
+            </div>
+            <p class="osc-hint">Rows are sources, columns are destinations. Unchecked = do not send. Incoming OSC senders appear as extra rows and are passed through by default.</p>
+          </div>
+
+          <div class="control-group">
+            <label for="osc-modal-hz">Controller send rate (Hz)</label>
             <input type="number" id="osc-modal-hz" class="text-input" min="1" max="120" value="60" />
           </div>
 
-          <label class="osc-toggle control-group">
-            <input type="checkbox" id="osc-modal-ignore-imu" checked />
-            Ignore IMU (gyro + accelerometer) — recommended
-          </label>
-
           <div class="control-group">
-            <label>Quick presets</label>
-            <div class="preset-grid osc-presets">
-              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:57121">localhost:57121</button>
-              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:9000">localhost:9000</button>
-              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:8000">localhost:8000</button>
-              <button type="button" class="preset-btn" data-osc-preset="127.0.0.1:7000">localhost:7000</button>
-            </div>
+            <label for="osc-ws-url">Gateway WebSocket</label>
+            <input type="text" id="osc-ws-url" class="text-input" value="ws://127.0.0.1:8081" />
           </div>
 
-          <div class="osc-modal-target">
-            Target: <code id="osc-modal-preview">udp://127.0.0.1:9000</code>
-          </div>
           <p id="osc-modal-error" class="osc-modal-error hidden"></p>
         </div>
         <div class="modal-footer">
@@ -93,335 +86,642 @@
       </div>
     </div>
 
-    <main>
-      <div id="webhid-warning" class="warning-banner hidden">
-        WebHID is not available in this browser. Use Chrome or Edge on desktop (Windows, macOS, Linux).
-      </div>
+    <!-- Hidden OSC destination mirrors -->
+    <input type="hidden" id="osc-out-host" value="127.0.0.1" />
+    <input type="hidden" id="osc-out-port" value="57121" />
 
-      <div id="disconnected-view" class="disconnected-overlay">
-        <h2>No controller connected</h2>
-        <p>
-          Plug in your DualSense via USB or pair over Bluetooth, then click Connect.<br />
-          Click the OSC IP button in the header to start streaming once the gateway is running.
-        </p>
-        <button id="connect-btn-2" class="primary" onclick="document.getElementById('connect-btn').click()">
-          Connect Controller
-        </button>
-      </div>
+    <div class="app-shell">
+      <aside id="sidebar" class="sidebar">
+        <button type="button" id="sidebar-toggle" class="sidebar-toggle" title="Collapse menu" aria-label="Collapse menu">‹</button>
 
-      <div id="main-content" class="hidden">
-        <div class="stats-row">
-          <div class="stat">
-            <div class="stat-value" id="report-rate">0</div>
-            <div class="stat-label">Reports / sec</div>
+        <nav class="sidebar-nav">
+          <section class="nav-section active" data-section="controller">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="controller">
+                <span class="nav-icon">DS</span>
+                <span class="nav-label">Controller</span>
+                <span class="nav-dot" id="controller-nav-dot"></span>
+              </button>
+              <button type="button" class="nav-fold" data-fold="controller" aria-label="Collapse controller"><span class="nav-fold-caret">▾</span></button>
+            </div>
+            <div class="nav-section-body" id="section-body-controller">
+              <div class="status-pill compact">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="connect-btn" class="primary">Connect</button>
+                <button id="disconnect-btn" disabled>Disconnect</button>
+              </div>
+              <label class="osc-toggle">
+                <input type="checkbox" id="controller-ignore-imu" checked />
+                Ignore IMU (gyro + accelerometer) — recommended
+              </label>
+            </div>
+          </section>
+
+          <section class="nav-section" data-section="garmin">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="garmin">
+                <span class="nav-icon">HR</span>
+                <span class="nav-label">Garmin HR</span>
+                <span class="nav-dot" id="garmin-nav-dot"></span>
+              </button>
+              <button type="button" class="nav-fold" data-fold="garmin" aria-label="Collapse Garmin HR"><span class="nav-fold-caret">▾</span></button>
+            </div>
+            <div class="nav-section-body" id="section-body-garmin">
+              <div class="status-pill compact">
+                <span class="status-dot" id="garmin-status-dot"></span>
+                <span id="garmin-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="garmin-connect-btn" class="primary">Connect</button>
+                <button id="garmin-disconnect-btn" disabled>Disconnect</button>
+              </div>
+              <p class="nav-hint">
+                Watch: Sensors → Heart Rate → Broadcast. Disconnect the phone first.
+              </p>
+
+              <div class="control-group">
+                <label for="garmin-trend-window">Trend window (sec)</label>
+                <input type="number" id="garmin-trend-window" class="text-input" min="5" max="600" step="5" value="30" />
+              </div>
+              <div class="control-group">
+                <label for="garmin-trend-range">Trend range ±bpm → 0–1</label>
+                <input type="number" id="garmin-trend-range" class="text-input" min="5" max="80" step="1" value="20" />
+              </div>
+
+              <label class="osc-toggle">
+                <input type="checkbox" id="garmin-trend-smooth" />
+                Smooth trend
+              </label>
+              <div class="control-group hidden" id="garmin-trend-smooth-sec-wrap">
+                <label for="garmin-trend-smooth-sec">Smooth time (sec)</label>
+                <input type="number" id="garmin-trend-smooth-sec" class="text-input" min="0.2" max="30" step="0.5" value="2" />
+              </div>
+
+              <label class="osc-toggle">
+                <input type="checkbox" id="garmin-normalize-hr" />
+                Normalize HR to 0–1
+              </label>
+              <div class="nav-row hidden" id="garmin-hr-range">
+                <div class="control-group">
+                  <label for="garmin-hr-min">HR min</label>
+                  <input type="number" id="garmin-hr-min" class="text-input" min="20" max="180" value="40" />
+                </div>
+                <div class="control-group">
+                  <label for="garmin-hr-max">HR max</label>
+                  <input type="number" id="garmin-hr-max" class="text-input" min="80" max="240" value="200" />
+                </div>
+              </div>
+
+              <label class="osc-toggle">
+                <input type="checkbox" id="garmin-send-beats" checked />
+                Send beat triggers
+              </label>
+            </div>
+          </section>
+
+          <section class="nav-section" data-section="macbook">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="macbook">
+                <span class="nav-icon">MB</span>
+                <span class="nav-label">MacBook</span>
+                <span class="nav-dot" id="macbook-nav-dot"></span>
+              </button>
+              <button type="button" class="nav-fold" data-fold="macbook" aria-label="Collapse MacBook"><span class="nav-fold-caret">▾</span></button>
+            </div>
+            <div class="nav-section-body" id="section-body-macbook">
+              <div class="status-pill compact">
+                <span class="status-dot" id="macbook-status-dot"></span>
+                <span id="macbook-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="macbook-connect-btn" class="primary">Connect</button>
+                <button id="macbook-disconnect-btn" disabled>Disconnect</button>
+              </div>
+              <p class="nav-hint">
+                Fast path is the local gateway (hidapi), not Chrome WebHID — otherwise the hinge only updates ~1 Hz.
+                Connect with <code>./run</code> running. If native open fails, Chrome will still offer the HID picker.
+              </p>
+              <div class="control-group">
+                <label for="macbook-closed-deg">Lid closed below (°)</label>
+                <input type="number" id="macbook-closed-deg" class="text-input" min="1" max="40" step="1" value="12" />
+              </div>
+              <div class="control-group">
+                <label for="macbook-angle-max">Open = 1.0 at (°)</label>
+                <input type="number" id="macbook-angle-max" class="text-input" min="90" max="360" step="5" value="180" />
+              </div>
+            </div>
+          </section>
+          <div id="nav-insources" class="nav-insources"></div>
+        </nav>
+      </aside>
+
+      <div class="main-column">
+        <main>
+        <div id="view-controller" class="view">
+          <div id="webhid-warning" class="warning-banner hidden">
+            WebHID is not available in this browser. Use Chrome or Edge on desktop (Windows, macOS, Linux).
           </div>
-          <div class="stat">
-            <div class="stat-value" id="report-id">—</div>
-            <div class="stat-label">Report ID</div>
+
+          <div id="disconnected-view" class="disconnected-overlay">
+            <h2>No controller connected</h2>
+            <p>
+              Plug in a DualSense via USB or pair over Bluetooth, then connect from the Controller
+              section. OSC destination is global — use the header to start streaming.
+            </p>
+            <button id="connect-btn-2" class="primary" type="button">Connect Controller</button>
           </div>
-          <div class="stat">
-            <div class="stat-value" id="battery-level">—</div>
-            <div class="stat-label">Battery</div>
-          </div>
-          <div class="stat">
-            <div class="stat-value" id="battery-status">—</div>
-            <div class="stat-label">Power</div>
+
+          <div id="main-content" class="hidden">
+            <div class="stats-row">
+              <div class="stat">
+                <div class="stat-value" id="report-rate">0</div>
+                <div class="stat-label">Reports / sec</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="report-id">—</div>
+                <div class="stat-label">Report ID</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="battery-level">—</div>
+                <div class="stat-label">Battery</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="battery-status">—</div>
+                <div class="stat-label">Power</div>
+              </div>
+            </div>
+
+            <div class="grid">
+              <div class="input-section">
+                <div class="panel">
+                  <h2>Buttons &amp; Sticks</h2>
+                  <div class="controller-wrap">
+                    <svg class="controller-svg" viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M350 20 C200 20 80 60 50 140 C30 200 60 280 120 300 C180 310 250 280 350 290 C450 280 520 310 580 300 C640 280 670 200 650 140 C620 60 500 20 350 20 Z"
+                        fill="#111111"
+                        stroke="#272727"
+                        stroke-width="2"
+                      />
+                      <rect id="btn-dpad-up" class="btn-indicator" x="155" y="95" width="24" height="24" rx="4" />
+                      <rect id="btn-dpad-down" class="btn-indicator" x="155" y="143" width="24" height="24" rx="4" />
+                      <rect id="btn-dpad-left" class="btn-indicator" x="131" y="119" width="24" height="24" rx="4" />
+                      <rect id="btn-dpad-right" class="btn-indicator" x="179" y="119" width="24" height="24" rx="4" />
+                      <circle id="btn-triangle" class="btn-indicator" cx="545" cy="95" r="14" />
+                      <circle id="btn-circle" class="btn-indicator" cx="575" cy="125" r="14" />
+                      <circle id="btn-cross" class="btn-indicator" cx="545" cy="155" r="14" />
+                      <circle id="btn-square" class="btn-indicator" cx="515" cy="125" r="14" />
+                      <rect id="btn-l1" class="btn-indicator" x="120" y="45" width="50" height="22" rx="6" />
+                      <rect id="btn-r1" class="btn-indicator" x="530" y="45" width="50" height="22" rx="6" />
+                      <circle cx="220" cy="175" r="40" fill="#080808" stroke="#272727" stroke-width="2" />
+                      <circle cx="480" cy="195" r="40" fill="#080808" stroke="#272727" stroke-width="2" />
+                      <rect id="btn-create" class="btn-indicator" x="295" y="130" width="36" height="14" rx="4" />
+                      <rect id="btn-options" class="btn-indicator" x="369" y="130" width="36" height="14" rx="4" />
+                      <circle id="btn-ps" class="btn-indicator" cx="350" cy="155" r="12" />
+                      <rect id="btn-mute" class="btn-indicator" x="338" y="175" width="24" height="14" rx="4" />
+                      <circle id="btn-l3" class="btn-indicator" cx="220" cy="175" r="10" />
+                      <circle id="btn-r3" class="btn-indicator" cx="480" cy="195" r="10" />
+                      <rect id="btn-touchpad" class="btn-indicator" x="280" y="95" width="140" height="55" rx="8" />
+                      <text x="145" y="88" fill="#8f8f8f" font-size="10" font-family="Inter Tight,sans-serif">L1</text>
+                      <text x="555" y="88" fill="#8f8f8f" font-size="10" font-family="Inter Tight,sans-serif">R1</text>
+                      <text x="200" y="240" fill="#8f8f8f" font-size="10" font-family="Inter Tight,sans-serif">L Stick</text>
+                      <text x="455" y="255" fill="#8f8f8f" font-size="10" font-family="Inter Tight,sans-serif">R Stick</text>
+                    </svg>
+                  </div>
+
+                  <div class="sticks-row">
+                    <div class="stick-panel">
+                      <h3>Left Stick</h3>
+                      <canvas class="stick-canvas" id="stick-left"></canvas>
+                      <div class="stick-values">
+                        <span>X: <span id="stick-lx">0.000</span></span>
+                        <span>Y: <span id="stick-ly">0.000</span></span>
+                      </div>
+                    </div>
+                    <div class="stick-panel">
+                      <h3>Right Stick</h3>
+                      <canvas class="stick-canvas" id="stick-right"></canvas>
+                      <div class="stick-values">
+                        <span>X: <span id="stick-rx">0.000</span></span>
+                        <span>Y: <span id="stick-ry">0.000</span></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <h2>Analog Triggers (L2 / R2)</h2>
+                  <div class="trigger-bar-wrap">
+                    <div class="trigger-label">
+                      <span>L2</span>
+                      <span id="trigger-l2-value">0%</span>
+                    </div>
+                    <div class="trigger-bar">
+                      <div class="trigger-fill" id="trigger-l2-fill"></div>
+                    </div>
+                  </div>
+                  <div class="trigger-bar-wrap">
+                    <div class="trigger-label">
+                      <span>R2</span>
+                      <span id="trigger-r2-value">0%</span>
+                    </div>
+                    <div class="trigger-bar">
+                      <div class="trigger-fill" id="trigger-r2-fill"></div>
+                    </div>
+                  </div>
+                  <div id="adaptive-section" class="hidden">
+                    <h2 style="margin-top: 1rem">Adaptive Trigger Feedback</h2>
+                    <p style="font-size: 0.85rem; color: var(--muted)">
+                      L2: <span id="l2-adaptive">—</span><br />
+                      R2: <span id="r2-adaptive">—</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="panel touchpad-wrap">
+                  <h2>Touchpad</h2>
+                  <canvas id="touchpad-canvas"></canvas>
+                  <div class="touch-info">
+                    <span id="touch0-info">Touch 1: —</span>
+                    <span id="touch1-info">Touch 2: —</span>
+                  </div>
+                </div>
+
+                <div class="panel" id="motion-section">
+                  <h2>Motion Sensors</h2>
+                  <div class="motion-grid">
+                    <div class="motion-item">
+                      <label>Gyro X</label>
+                      <span id="gyro-x">0</span>
+                    </div>
+                    <div class="motion-item">
+                      <label>Gyro Y</label>
+                      <span id="gyro-y">0</span>
+                    </div>
+                    <div class="motion-item">
+                      <label>Gyro Z</label>
+                      <span id="gyro-z">0</span>
+                    </div>
+                    <div class="motion-item">
+                      <label>Accel X</label>
+                      <span id="accel-x">0</span>
+                    </div>
+                    <div class="motion-item">
+                      <label>Accel Y</label>
+                      <span id="accel-y">0</span>
+                    </div>
+                    <div class="motion-item">
+                      <label>Accel Z</label>
+                      <span id="accel-z">0</span>
+                    </div>
+                  </div>
+                  <canvas class="motion-chart" id="motion-chart"></canvas>
+                  <p style="font-size: 0.75rem; color: var(--muted); margin-top: 0.5rem">
+                    Sensor timestamp: <span id="sensor-ts">—</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="output-section">
+                <div class="panel">
+                  <h2>Device Info</h2>
+                  <div class="device-info">
+                    <div><strong>Name:</strong> <span id="device-name">—</span></div>
+                    <div><strong>VID:PID:</strong> <span id="device-vidpid">—</span></div>
+                    <div><strong>Connection:</strong> <span id="device-connection">—</span></div>
+                  </div>
+                  <div id="battery-section" class="hidden" style="margin-top: 1rem">
+                    <div class="battery-bar">
+                      <div class="battery-fill" id="battery-fill" style="width: 0%"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="tabs">
+                    <button class="tab active" data-tab="output">Output</button>
+                    <button class="tab" data-tab="osc">OSC</button>
+                    <button class="tab" data-tab="debug">Debug</button>
+                  </div>
+
+                  <div id="tab-output">
+                    <h2>Lightbar</h2>
+                    <div class="control-group">
+                      <div class="color-preview" id="color-preview"></div>
+                      <input type="color" id="lightbar-color" value="#0050ff" />
+                    </div>
+
+                    <h2>Player LEDs</h2>
+                    <div class="player-leds control-group">
+                      <button class="led-btn active" data-led="1">1</button>
+                      <button class="led-btn" data-led="2">2</button>
+                      <button class="led-btn active" data-led="3">3</button>
+                      <button class="led-btn" data-led="4">4</button>
+                      <button class="led-btn" data-led="5">5</button>
+                    </div>
+
+                    <h2>Mute LED</h2>
+                    <label>
+                      <input type="checkbox" id="mute-led" /> Mute indicator on
+                    </label>
+
+                    <h2 style="margin-top: 1rem">Rumble Motors</h2>
+                    <div class="control-group">
+                      <label>Left motor</label>
+                      <input type="range" id="rumble-left-slider" min="0" max="255" value="0" />
+                    </div>
+                    <div class="control-group">
+                      <label>Right motor</label>
+                      <input type="range" id="rumble-right-slider" min="0" max="255" value="0" />
+                    </div>
+                    <div class="rumble-test">
+                      <button id="rumble-left">Pulse Left</button>
+                      <button id="rumble-right">Pulse Right</button>
+                      <button id="rumble-both">Pulse Both</button>
+                      <button id="rumble-stop">Stop</button>
+                    </div>
+
+                    <h2 style="margin-top: 1rem">L2 Adaptive Trigger</h2>
+                    <div class="preset-grid">
+                      <button class="preset-btn active" data-side="l2" data-preset="off">Off</button>
+                      <button class="preset-btn" data-side="l2" data-preset="rigid">Rigid</button>
+                      <button class="preset-btn" data-side="l2" data-preset="pulse">Pulse</button>
+                      <button class="preset-btn" data-side="l2" data-preset="vibration">Vibration</button>
+                    </div>
+
+                    <h2 style="margin-top: 1rem">R2 Adaptive Trigger</h2>
+                    <div class="preset-grid">
+                      <button class="preset-btn active" data-side="r2" data-preset="off">Off</button>
+                      <button class="preset-btn" data-side="r2" data-preset="rigid">Rigid</button>
+                      <button class="preset-btn" data-side="r2" data-preset="pulse">Pulse</button>
+                      <button class="preset-btn" data-side="r2" data-preset="vibration">Vibration</button>
+                    </div>
+                  </div>
+
+                  <div id="tab-osc" class="hidden">
+                    <h2>OSC Gateway</h2>
+                    <p class="osc-hint">
+                      Destinations and routing are global (header Edit). This tab shows DualSense stream stats.
+                      Incoming UDP appears in the bottom dock. See <code>OSC_SPEC.md</code> for addresses.
+                    </p>
+
+                    <div class="control-group">
+                      <label>Output destinations</label>
+                      <div class="osc-row" style="grid-template-columns: 1fr auto;">
+                        <input type="text" id="osc-dest-display" class="text-input" readonly value="udp://127.0.0.1:57121" />
+                        <button type="button" id="osc-config-open-tab">Edit…</button>
+                      </div>
+                    </div>
+
+                    <div class="rumble-test" style="margin-bottom: 0.75rem">
+                      <button id="osc-connect-btn" class="primary">Connect gateway</button>
+                      <button id="osc-disconnect-btn" disabled>Disconnect</button>
+                    </div>
+
+                    <label class="osc-toggle">
+                      <input type="checkbox" id="osc-enable" disabled />
+                      Stream OSC
+                    </label>
+                    <p class="osc-hint" style="margin-top: 0.5rem">
+                      Keep this tool in its <strong>own browser window</strong> (not a background tab) —
+                      Chrome throttles inactive tabs. Bundles increment when values change.
+                    </p>
+
+                    <div class="device-info" style="margin-top: 1rem">
+                      <div><strong>Gateway:</strong> <span id="osc-status">offline</span></div>
+                      <div><strong>Listen (in):</strong> <span id="osc-in-port">udp://0.0.0.0:9001</span></div>
+                      <div><strong>Bundles sent:</strong> <span id="osc-sent">0</span></div>
+                      <div><strong>Controls recv:</strong> <span id="osc-recv">0</span></div>
+                      <div><strong>Last OSC in:</strong> <span id="osc-last">—</span></div>
+                    </div>
+                  </div>
+
+                  <div id="tab-debug" class="hidden">
+                    <h2>Raw Input Report</h2>
+                    <textarea id="raw-hex" readonly placeholder="Connect and press buttons…"></textarea>
+
+                    <h2 style="margin-top: 1rem">Feature Reports</h2>
+                    <div class="rumble-test" style="margin-bottom: 0.75rem">
+                      <button id="read-feature-20">Firmware 0x20</button>
+                      <button id="read-feature-22">Hardware 0x22</button>
+                      <button id="read-feature-05">Calibration 0x05</button>
+                    </div>
+                    <div class="feature-result" id="feature-result">Click a button to read feature report…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="grid">
-          <div class="input-section">
-            <div class="panel">
-              <h2>Buttons &amp; Sticks</h2>
-              <div class="controller-wrap">
-                <svg class="controller-svg" viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Body outline -->
-                  <path
-                    d="M350 20 C200 20 80 60 50 140 C30 200 60 280 120 300 C180 310 250 280 350 290 C450 280 520 310 580 300 C640 280 670 200 650 140 C620 60 500 20 350 20 Z"
-                    fill="#1a1f2a"
-                    stroke="#2a3142"
-                    stroke-width="2"
-                  />
+        <div id="view-garmin" class="view hidden">
+          <div id="webbluetooth-warning" class="warning-banner hidden">
+            Web Bluetooth is not available in this browser. Use Chrome or Edge on desktop.
+          </div>
 
-                  <!-- D-Pad -->
-                  <rect id="btn-dpad-up" class="btn-indicator" x="155" y="95" width="24" height="24" rx="4" />
-                  <rect id="btn-dpad-down" class="btn-indicator" x="155" y="143" width="24" height="24" rx="4" />
-                  <rect id="btn-dpad-left" class="btn-indicator" x="131" y="119" width="24" height="24" rx="4" />
-                  <rect id="btn-dpad-right" class="btn-indicator" x="179" y="119" width="24" height="24" rx="4" />
+          <div id="garmin-disconnected" class="disconnected-overlay">
+            <h2 id="garmin-overlay-title">No heart rate broadcast</h2>
+            <p>
+              On the Garmin: <strong>Sensors &amp; Accessories → Heart Rate → Broadcast Heart Rate</strong>.<br />
+              Disconnect Garmin Connect / the phone first — the watch typically allows one BLE connection.
+            </p>
+            <button id="garmin-connect-btn-2" class="primary" type="button">Connect Garmin</button>
+          </div>
 
-                  <!-- Face buttons -->
-                  <circle id="btn-triangle" class="btn-indicator" cx="545" cy="95" r="14" />
-                  <circle id="btn-circle" class="btn-indicator" cx="575" cy="125" r="14" />
-                  <circle id="btn-cross" class="btn-indicator" cx="545" cy="155" r="14" />
-                  <circle id="btn-square" class="btn-indicator" cx="515" cy="125" r="14" />
+          <div id="garmin-live" class="hidden">
+            <div class="hr-hero panel">
+              <div class="hr-beat" id="garmin-beat-pulse"></div>
+              <div class="hr-value" id="garmin-hr-value">—</div>
+              <div class="hr-unit">BPM</div>
+              <div class="hr-device" id="garmin-device-name">—</div>
+            </div>
 
-                  <!-- Shoulder -->
-                  <rect id="btn-l1" class="btn-indicator" x="120" y="45" width="50" height="22" rx="6" />
-                  <rect id="btn-r1" class="btn-indicator" x="530" y="45" width="50" height="22" rx="6" />
-
-                  <!-- Sticks -->
-                  <circle cx="220" cy="175" r="40" fill="#0d1017" stroke="#2a3142" stroke-width="2" />
-                  <circle cx="480" cy="195" r="40" fill="#0d1017" stroke="#2a3142" stroke-width="2" />
-
-                  <!-- Center buttons -->
-                  <rect id="btn-create" class="btn-indicator" x="295" y="130" width="36" height="14" rx="4" />
-                  <rect id="btn-options" class="btn-indicator" x="369" y="130" width="36" height="14" rx="4" />
-                  <circle id="btn-ps" class="btn-indicator" cx="350" cy="155" r="12" />
-                  <rect id="btn-mute" class="btn-indicator" x="338" y="175" width="24" height="14" rx="4" />
-
-                  <!-- Stick clicks -->
-                  <circle id="btn-l3" class="btn-indicator" cx="220" cy="175" r="10" />
-                  <circle id="btn-r3" class="btn-indicator" cx="480" cy="195" r="10" />
-
-                  <!-- Touchpad -->
-                  <rect id="btn-touchpad" class="btn-indicator" x="280" y="95" width="140" height="55" rx="8" />
-
-                  <!-- Labels -->
-                  <text x="145" y="88" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">L1</text>
-                  <text x="555" y="88" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">R1</text>
-                  <text x="200" y="240" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">L Stick</text>
-                  <text x="455" y="255" fill="#8b95a8" font-size="10" font-family="Outfit,sans-serif">R Stick</text>
-                </svg>
+            <div class="stats-row hr-stats">
+              <div class="stat">
+                <div class="stat-value" id="garmin-trend-value">0.50</div>
+                <div class="stat-label">Trend (0–1)</div>
               </div>
-
-              <div class="sticks-row">
-                <div class="stick-panel">
-                  <h3>Left Stick</h3>
-                  <canvas class="stick-canvas" id="stick-left"></canvas>
-                  <div class="stick-values">
-                    <span>X: <span id="stick-lx">0.000</span></span>
-                    <span>Y: <span id="stick-ly">0.000</span></span>
-                  </div>
-                </div>
-                <div class="stick-panel">
-                  <h3>Right Stick</h3>
-                  <canvas class="stick-canvas" id="stick-right"></canvas>
-                  <div class="stick-values">
-                    <span>X: <span id="stick-rx">0.000</span></span>
-                    <span>Y: <span id="stick-ry">0.000</span></span>
-                  </div>
-                </div>
+              <div class="stat">
+                <div class="stat-value" id="garmin-trend-delta">0</div>
+                <div class="stat-label">Δ bpm / window</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="garmin-osc-hr">—</div>
+                <div class="stat-label">/garmin/hr</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="garmin-beats">0</div>
+                <div class="stat-label">Beats sent</div>
               </div>
             </div>
 
-            <div class="panel">
-              <h2>Analog Triggers (L2 / R2)</h2>
-              <div class="trigger-bar-wrap">
-                <div class="trigger-label">
-                  <span>L2</span>
-                  <span id="trigger-l2-value">0%</span>
+            <div class="osc-charts">
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/garmin/hr</h2>
+                  <span class="osc-chart-value" id="chart-hr-value">—</span>
                 </div>
-                <div class="trigger-bar">
-                  <div class="trigger-fill" id="trigger-l2-fill"></div>
-                </div>
+                <canvas class="hr-chart" id="garmin-chart-hr"></canvas>
               </div>
-              <div class="trigger-bar-wrap">
-                <div class="trigger-label">
-                  <span>R2</span>
-                  <span id="trigger-r2-value">0%</span>
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/garmin/trend</h2>
+                  <span class="osc-chart-value" id="chart-trend-value">—</span>
                 </div>
-                <div class="trigger-bar">
-                  <div class="trigger-fill" id="trigger-r2-fill"></div>
-                </div>
+                <canvas class="hr-chart" id="garmin-chart-trend"></canvas>
               </div>
-              <div id="adaptive-section" class="hidden">
-                <h2 style="margin-top: 1rem">Adaptive Trigger Feedback</h2>
-                <p style="font-size: 0.85rem; color: var(--muted)">
-                  L2: <span id="l2-adaptive">—</span><br />
-                  R2: <span id="r2-adaptive">—</span>
-                </p>
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/garmin/push_beat</h2>
+                  <span class="osc-chart-value" id="chart-beat-value">0</span>
+                </div>
+                <canvas class="hr-chart" id="garmin-chart-beat"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="view-macbook" class="view hidden">
+          <div id="macbook-hid-warning" class="warning-banner hidden">
+            WebHID is not available in this browser. Use Chrome or Edge on a MacBook.
+          </div>
+
+          <div id="macbook-disconnected" class="disconnected-overlay">
+            <h2 id="macbook-overlay-title">No MacBook sensors</h2>
+            <p>
+              Connect to read the <strong>lid angle</strong> sensor. The gateway reads it natively so it stays in sync
+              with the hinge (Chrome WebHID is capped at about 1 Hz). Start with <code>./run</code>, then Connect.
+              The Chrome picker is only a fallback.
+            </p>
+            <button id="macbook-connect-btn-2" class="primary" type="button">Connect MacBook sensors</button>
+            <p class="nav-hint" id="macbook-error"></p>
+          </div>
+
+          <div id="macbook-live" class="hidden">
+            <div class="hr-hero panel mac-hero">
+              <div class="mac-hinge" aria-hidden="true">
+                <div class="mac-base"></div>
+                <div class="mac-lid" id="mac-lid-graphic"></div>
+              </div>
+              <div class="hr-value" id="macbook-angle-value">—</div>
+              <div class="hr-unit">Lid angle</div>
+              <div class="hr-device" id="macbook-device-name">—</div>
+            </div>
+
+            <div class="stats-row hr-stats">
+              <div class="stat">
+                <div class="stat-value" id="macbook-open-value">—</div>
+                <div class="stat-label">Lid open</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="macbook-norm-value">—</div>
+                <div class="stat-label">/mac/lid/norm</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="macbook-als-value">—</div>
+                <div class="stat-label">Ambient light</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="macbook-accel-mag">—</div>
+                <div class="stat-label">Accel |g|</div>
               </div>
             </div>
 
-            <div class="panel touchpad-wrap">
-              <h2>Touchpad</h2>
-              <canvas id="touchpad-canvas"></canvas>
-              <div class="touch-info">
-                <span id="touch0-info">Touch 1: —</span>
-                <span id="touch1-info">Touch 2: —</span>
-              </div>
-            </div>
-
-            <div class="panel" id="motion-section">
-              <h2>Motion Sensors</h2>
+            <div class="panel hidden" id="macbook-imu-panel">
+              <h2>Motion</h2>
               <div class="motion-grid">
                 <div class="motion-item">
-                  <label>Gyro X</label>
-                  <span id="gyro-x">0</span>
-                </div>
-                <div class="motion-item">
-                  <label>Gyro Y</label>
-                  <span id="gyro-y">0</span>
-                </div>
-                <div class="motion-item">
-                  <label>Gyro Z</label>
-                  <span id="gyro-z">0</span>
-                </div>
-                <div class="motion-item">
                   <label>Accel X</label>
-                  <span id="accel-x">0</span>
+                  <span id="mac-accel-x">—</span>
                 </div>
                 <div class="motion-item">
                   <label>Accel Y</label>
-                  <span id="accel-y">0</span>
+                  <span id="mac-accel-y">—</span>
                 </div>
                 <div class="motion-item">
                   <label>Accel Z</label>
-                  <span id="accel-z">0</span>
+                  <span id="mac-accel-z">—</span>
                 </div>
-              </div>
-              <canvas class="motion-chart" id="motion-chart"></canvas>
-              <p style="font-size: 0.75rem; color: var(--muted); margin-top: 0.5rem">
-                Sensor timestamp: <span id="sensor-ts">—</span>
-              </p>
-            </div>
-          </div>
-
-          <div class="output-section">
-            <div class="panel">
-              <h2>Device Info</h2>
-              <div class="device-info">
-                <div><strong>Name:</strong> <span id="device-name">—</span></div>
-                <div><strong>VID:PID:</strong> <span id="device-vidpid">—</span></div>
-                <div><strong>Connection:</strong> <span id="device-connection">—</span></div>
-              </div>
-              <div id="battery-section" class="hidden" style="margin-top: 1rem">
-                <div class="battery-bar">
-                  <div class="battery-fill" id="battery-fill" style="width: 0%"></div>
+                <div class="motion-item">
+                  <label>Gyro X</label>
+                  <span id="mac-gyro-x">—</span>
+                </div>
+                <div class="motion-item">
+                  <label>Gyro Y</label>
+                  <span id="mac-gyro-y">—</span>
+                </div>
+                <div class="motion-item">
+                  <label>Gyro Z</label>
+                  <span id="mac-gyro-z">—</span>
                 </div>
               </div>
             </div>
 
-            <div class="panel">
-              <div class="tabs">
-                <button class="tab active" data-tab="output">Output</button>
-                <button class="tab" data-tab="osc">OSC</button>
-                <button class="tab" data-tab="debug">Debug</button>
+            <div class="osc-charts">
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/mac/lid/angle</h2>
+                  <span class="osc-chart-value" id="chart-mac-angle-value">—</span>
+                </div>
+                <canvas class="hr-chart" id="macbook-chart-angle"></canvas>
               </div>
-
-              <div id="tab-output">
-                <h2>Lightbar</h2>
-                <div class="control-group">
-                  <div class="color-preview" id="color-preview"></div>
-                  <input type="color" id="lightbar-color" value="#0050ff" />
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/mac/lid/open</h2>
+                  <span class="osc-chart-value" id="chart-mac-open-value">—</span>
                 </div>
-
-                <h2>Player LEDs</h2>
-                <div class="player-leds control-group">
-                  <button class="led-btn active" data-led="1">1</button>
-                  <button class="led-btn" data-led="2">2</button>
-                  <button class="led-btn active" data-led="3">3</button>
-                  <button class="led-btn" data-led="4">4</button>
-                  <button class="led-btn" data-led="5">5</button>
-                </div>
-
-                <h2>Mute LED</h2>
-                <label>
-                  <input type="checkbox" id="mute-led" /> Mute indicator on
-                </label>
-
-                <h2 style="margin-top: 1rem">Rumble Motors</h2>
-                <div class="control-group">
-                  <label>Left motor</label>
-                  <input type="range" id="rumble-left-slider" min="0" max="255" value="0" />
-                </div>
-                <div class="control-group">
-                  <label>Right motor</label>
-                  <input type="range" id="rumble-right-slider" min="0" max="255" value="0" />
-                </div>
-                <div class="rumble-test">
-                  <button id="rumble-left">Pulse Left</button>
-                  <button id="rumble-right">Pulse Right</button>
-                  <button id="rumble-both">Pulse Both</button>
-                  <button id="rumble-stop">Stop</button>
-                </div>
-
-                <h2 style="margin-top: 1rem">L2 Adaptive Trigger</h2>
-                <div class="preset-grid">
-                  <button class="preset-btn active" data-side="l2" data-preset="off">Off</button>
-                  <button class="preset-btn" data-side="l2" data-preset="rigid">Rigid</button>
-                  <button class="preset-btn" data-side="l2" data-preset="pulse">Pulse</button>
-                  <button class="preset-btn" data-side="l2" data-preset="vibration">Vibration</button>
-                </div>
-
-                <h2 style="margin-top: 1rem">R2 Adaptive Trigger</h2>
-                <div class="preset-grid">
-                  <button class="preset-btn active" data-side="r2" data-preset="off">Off</button>
-                  <button class="preset-btn" data-side="r2" data-preset="rigid">Rigid</button>
-                  <button class="preset-btn" data-side="r2" data-preset="pulse">Pulse</button>
-                  <button class="preset-btn" data-side="r2" data-preset="vibration">Vibration</button>
-                </div>
-              </div>
-
-              <div id="tab-osc" class="hidden">
-                <h2>OSC Gateway</h2>
-                <p class="osc-hint">
-                  Run <code>npm run gateway</code>, then stream all DualSense signals as floats 0–1.
-                  See <code>OSC_SPEC.md</code> for the full address list.
-                </p>
-
-                <div class="control-group">
-                  <label>Output destination</label>
-                  <div class="osc-row" style="grid-template-columns: 1fr auto;">
-                    <input type="text" id="osc-dest-display" class="text-input" readonly value="udp://127.0.0.1:9000" />
-                    <button type="button" id="osc-config-open-tab">Edit…</button>
-                  </div>
-                </div>
-
-                <div class="control-group">
-                  <label>Gateway WebSocket</label>
-                  <input type="text" id="osc-ws-url" value="ws://127.0.0.1:8081" class="text-input" />
-                </div>
-                <!-- Hidden mirrors kept in sync with the config modal -->
-                <input type="hidden" id="osc-out-host" value="127.0.0.1" />
-                <input type="hidden" id="osc-out-port" value="9000" />
-
-                <div class="rumble-test" style="margin-bottom: 0.75rem">
-                  <button id="osc-connect-btn" class="primary">Connect gateway</button>
-                  <button id="osc-disconnect-btn" disabled>Disconnect</button>
-                </div>
-
-                <label class="osc-toggle">
-                  <input type="checkbox" id="osc-enable" disabled />
-                  Stream OSC (send all signals)
-                </label>
-
-                <label class="osc-toggle" style="margin-top: 0.5rem">
-                  <input type="checkbox" id="osc-ignore-imu" checked />
-                  Ignore IMU (gyro + accelerometer) — recommended
-                </label>
-                <p class="osc-hint" style="margin-top: 0.5rem">
-                  With IMU on, gyro noise sends every frame and causes lag. Keep this tool in its
-                  <strong>own browser window</strong> (not a background tab) — Chrome throttles
-                  inactive tabs. Bundles counter only increments when values change.
-                </p>
-
-                <div class="device-info" style="margin-top: 1rem">
-                  <div><strong>Gateway:</strong> <span id="osc-status">offline</span></div>
-                  <div><strong>Listen (in):</strong> <span id="osc-in-port">udp://0.0.0.0:9001</span></div>
-                  <div><strong>Bundles sent:</strong> <span id="osc-sent">0</span></div>
-                  <div><strong>Controls recv:</strong> <span id="osc-recv">0</span></div>
-                  <div><strong>Last OSC in:</strong> <span id="osc-last">—</span></div>
-                </div>
-              </div>
-
-              <div id="tab-debug" class="hidden">
-                <h2>Raw Input Report</h2>
-                <textarea id="raw-hex" readonly placeholder="Connect and press buttons…"></textarea>
-
-                <h2 style="margin-top: 1rem">Feature Reports</h2>
-                <div class="rumble-test" style="margin-bottom: 0.75rem">
-                  <button id="read-feature-20">Firmware 0x20</button>
-                  <button id="read-feature-22">Hardware 0x22</button>
-                  <button id="read-feature-05">Calibration 0x05</button>
-                </div>
-                <div class="feature-result" id="feature-result">Click a button to read feature report…</div>
+                <canvas class="hr-chart" id="macbook-chart-open"></canvas>
               </div>
             </div>
           </div>
         </div>
+
+        <div id="view-insource" class="view hidden">
+          <div class="panel insource-head">
+            <div class="insource-head-row">
+              <input type="text" id="insource-name" class="text-input insource-name" />
+              <span class="osc-hint" id="insource-from"></span>
+            </div>
+            <p class="osc-hint">
+              Off passes values through. Auto maps the detected min/max to 0–1.
+              Manual uses the range you set. Expand an endpoint for the live chart.
+            </p>
+          </div>
+          <div id="insource-endpoints" class="insource-endpoints"></div>
+        </div>
+      </main>
+
+      <aside id="osc-in-dock" class="osc-in-dock">
+        <div id="osc-in-resize" class="osc-in-resize" title="Drag to resize"></div>
+        <button type="button" id="osc-in-toggle" class="osc-in-toggle" title="Collapse incoming OSC" aria-label="Collapse incoming OSC">⌄</button>
+        <div class="osc-in-bar">
+          <div class="osc-in-title">
+            Incoming OSC
+            <span class="osc-in-count" id="osc-in-count">0</span>
+          </div>
+          <input type="search" id="osc-in-filter" class="text-input osc-in-search" placeholder="Filter address, args, source…" autocomplete="off" />
+          <div class="osc-in-modes">
+            <button type="button" data-osc-in-mode="raw">Raw</button>
+            <button type="button" class="active" data-osc-in-mode="compact">Compact</button>
+          </div>
+          <button type="button" id="osc-in-clear">Clear</button>
+        </div>
+        <div class="osc-in-from-row">
+          <span class="osc-in-muted">Sources</span>
+          <div id="osc-in-from-filters" class="osc-in-from-filters">
+            <span class="osc-in-muted">No sources yet</span>
+          </div>
+        </div>
+        <div class="osc-in-body">
+          <pre id="osc-in-raw" class="osc-in-raw hidden"></pre>
+          <div id="osc-in-compact" class="osc-in-compact"></div>
+        </div>
+      </aside>
       </div>
-    </main>
+    </div>
 
     <script type="module" src="/src/app.js"></script>
   </body>

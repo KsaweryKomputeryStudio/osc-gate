@@ -16,28 +16,63 @@ export class OscBridge {
     hz = DEFAULT_HZ,
     onStatus,
     onControl,
+    onGateway,
+    onIncoming,
   } = {}) {
     this.wsUrl = wsUrl;
     this.hz = hz;
     this.onStatus = onStatus || (() => {});
     this.onControl = onControl || (() => {});
+    this.onGateway = onGateway || (() => {});
+    this.onIncoming = onIncoming || (() => {});
     this.ws = null;
     this.enabled = false;
     this.host = '127.0.0.1';
-    this.port = 9000;
+    this.port = 57121;
     this._reconnectTimer = null;
     this._wantConnect = false;
     this._latestState = null;
     this._lastFlushMs = 0;
     this._lastSent = new Map();
     this.ignoreImu = false;
+    this.destinations = [];
+    this.routing = {};
+    this.inSources = [];
+    this.inPort = 9001;
     this.stats = { sentBundles: 0, recvMessages: 0, dropped: 0 };
   }
 
   setDestination(host, port) {
     this.host = host;
     this.port = Number(port);
-    this._send({ type: 'config', host: this.host, port: this.port });
+    if (this.destinations[0]) {
+      this.destinations[0] = { ...this.destinations[0], host: this.host, port: this.port };
+    }
+    this._pushRouting();
+  }
+
+  setDestinations(destinations, routing, inPort, inSources) {
+    if (Array.isArray(destinations)) this.destinations = destinations;
+    if (routing) this.routing = routing;
+    if (inPort != null) this.inPort = Number(inPort) || this.inPort;
+    if (Array.isArray(inSources)) this.inSources = inSources;
+    if (this.destinations[0]) {
+      this.host = this.destinations[0].host;
+      this.port = this.destinations[0].port;
+    }
+    this._pushRouting();
+  }
+
+  _pushRouting() {
+    this._send({
+      type: 'config',
+      host: this.host,
+      port: this.port,
+      inPort: this.inPort,
+      destinations: this.destinations,
+      routing: this.routing,
+      inSources: this.inSources,
+    });
   }
 
   setHz(hz) {
@@ -56,6 +91,21 @@ export class OscBridge {
   connect() {
     this._wantConnect = true;
     this._open();
+  }
+
+  waitUntilOpen(ms = 1500) {
+    return new Promise((resolve) => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => resolve(false), ms);
+      const onOpen = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      this.ws?.addEventListener('open', onOpen, { once: true });
+    });
   }
 
   disconnect() {
@@ -97,7 +147,7 @@ export class OscBridge {
     }
 
     this.ws.addEventListener('open', () => {
-      this._send({ type: 'config', host: this.host, port: this.port });
+      this._pushRouting();
       this.onStatus({ connected: true, enabled: this.enabled });
     });
 
@@ -116,11 +166,18 @@ export class OscBridge {
           oscOut: msg.oscOut || { host: this.host, port: this.port },
           oscIn: msg.oscIn,
         });
+        this.onGateway(msg);
+        return;
+      }
+
+      if (msg.type === 'macbook-sample' || msg.type === 'macbook-status') {
+        this.onGateway(msg);
         return;
       }
 
       if (msg.type === 'osc') {
         this.stats.recvMessages++;
+        this.onIncoming(msg);
         this.onControl(msg.address, msg.args || []);
       }
     });
@@ -141,6 +198,10 @@ export class OscBridge {
     }, 1500);
   }
 
+  send(obj) {
+    return this._send(obj);
+  }
+
   _send(obj) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       if (this.ws.bufferedAmount > 256 * 1024) {
@@ -151,6 +212,26 @@ export class OscBridge {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Send OSC messages immediately (Garmin HR/trend, etc.).
+   * Continuous values are change-diffed unless `force` is set.
+   */
+  sendMessages(messages, { force = false, source = 'controller' } = {}) {
+    if (!this.enabled) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const out = force ? messages : this._diff(messages, source);
+    if (!out.length) return;
+    if (this._send({ type: 'bundle', source, messages: out })) {
+      this.stats.sentBundles++;
+    }
+  }
+
+  /** Fire-and-forget trigger (bypasses latest-wins bundle queue). */
+  sendTrigger(address, value = 1, { source = 'controller' } = {}) {
+    if (!this.enabled) return;
+    this._send({ type: 'message', source, address, args: [Number(value)] });
   }
 
   /**
@@ -178,18 +259,18 @@ export class OscBridge {
     this._lastFlushMs = now;
 
     const all = stateToOscMessages(state, { ignoreImu: this.ignoreImu });
-    const changed = this._diff(all);
+    const changed = this._diff(all, 'controller');
     if (!changed.length) return;
 
-    if (this._send({ type: 'bundle', messages: changed })) {
+    if (this._send({ type: 'bundle', source: 'controller', messages: changed })) {
       this.stats.sentBundles++;
     }
   }
 
-  _diff(messages) {
+  _diff(messages, source = 'controller') {
     const out = [];
     for (const m of messages) {
-      const key = m.address;
+      const key = `${source}:${m.address}`;
       const args = m.args || [];
       const prev = this._lastSent.get(key);
       if (prev && argsEqual(args, prev, FLOAT_EPS)) continue;

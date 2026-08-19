@@ -1,5 +1,5 @@
 {
-  "name": "dualsense-webhid-tester",
+  "name": "osc-gate",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -15,6 +15,7 @@
     "run:mac:dev": "bash scripts/run-dev.sh"
   },
   "dependencies": {
+    "node-hid": "^3.4.0",
     "osc": "^2.4.5",
     "ws": "^8.18.0"
   },

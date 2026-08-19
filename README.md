@@ -1,22 +1,22 @@
-# pad-to-osc
+# osc-gate
 
-DualSense WebHID tester with OSC gateway — browser-based PS5 controller testing and normalized OSC output.
+Multipurpose **data → OSC** gateway. Browser sources (DualSense, Garmin heart rate, …) stream to UDP OSC through a local WebSocket gateway.
 
 ## macOS / Linux
 
 ```bash
-chmod +x scripts/*.sh   # first time only
-./scripts/install.sh    # npm install
-./scripts/run.sh        # gateway + web UI
+chmod +x run scripts/*.sh   # first time only
+./scripts/install.sh        # npm install
+./run                       # gateway + web UI
 ```
 
-Or via npm:
+Use **Chrome** or **Edge** on desktop.
 
-```bash
-npm run install:mac
-npm run run:mac
-```
+- **Controller** — DualSense via USB or Bluetooth (WebHID). Ignore IMU lives here.
+- **Garmin HR** — watch Broadcast Heart Rate over Bluetooth LE (standard Heart Rate service). Disconnect Garmin Connect / the phone first.
+- **MacBook** — lid angle via the local gateway (fast). Chrome WebHID is a slow fallback (~1 Hz). 2019+ MacBooks.
+- **OSC** — start/stop streaming from the header. **Edit** sets the UDP input port, destinations, and a routing matrix (sources × destinations; default all → all). Incoming UDP is shown in the bottom dock and passed through to routed destinations.
 
-Use **Chrome** or **Edge** on desktop. Connect DualSense via USB or Bluetooth, then open the OSC tab to configure output.
+Settings are stored in the browser and restored on reload.
 
-See `OSC_SPEC.md` for the full OSC address list.
+See `OSC_SPEC.md` for addresses (`/ds/…`, `/garmin/…`, `/mac/…`).

@@ -1,8 +1,25 @@
 import { DualSenseDevice, normalizeStick, normalizeTrigger } from './dualsense.js';
 import { OscBridge, applyOscControl } from './oscBridge.js';
+import { loadConfig, saveConfig } from './config.js';
+import { GarminHrSource, hrToOsc, trendToOsc } from './garminHr.js';
+import { MacbookSensorSource } from './macbookSensors.js';
+import { startPerlinBg } from './perlinBg.js';
+import { AudioClock } from './audioClock.js';
+import {
+  destLabel,
+  inSourceId,
+  isRouted,
+  newDestId,
+  pruneRouting,
+  routingSources,
+  setRoute,
+} from './oscRouting.js';
+import { setupOscInMonitor } from './oscInMonitor.js';
+import { argVals, asNumber, firstNumber, observeRange, transformArgs } from './oscInScale.js';
 
 const TOUCHPAD_W = 1920;
 const TOUCHPAD_H = 1080;
+const GARMIN_CHART_WINDOW_MS = 60_000;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -18,12 +35,30 @@ let oscBridge = null;
 let oscWantStream = false;
 let oscGwConnected = false;
 
+let garmin = null;
+let garminBeatsSent = 0;
+let garminBeatPulseTimer = null;
+let garminChartTimer = null;
+let audioClock = null;
+const garminOsc = { hr: [], trend: [], beat: [] };
+
+let macbook = null;
+let macbookChartTimer = null;
+let oscInMonitor = { push() {}, renderSources() {}, render() {} };
+const inLive = new Map();
+const inAuto = new Map();
+let inChartTimer = null;
+let macbookNativeWait = null;
+let macbookUsingNative = false;
+const macbookOsc = { angle: [], open: [] };
+
 const stickCanvases = {
   left: { canvas: $('#stick-left'), ctx: null },
   right: { canvas: $('#stick-right'), ctx: null },
 };
 
 function init() {
+  startPerlinBg('perlinBg', [255, 140, 0]);
   stickCanvases.left.ctx = stickCanvases.left.canvas.getContext('2d');
   stickCanvases.right.ctx = stickCanvases.right.canvas.getContext('2d');
   drawStick(stickCanvases.left.ctx, stickCanvases.left.canvas, 0, 0);
@@ -32,97 +67,307 @@ function init() {
   if (!('hid' in navigator)) {
     $('#webhid-warning').classList.remove('hidden');
     $('#connect-btn').disabled = true;
+    $('#connect-btn-2').disabled = true;
+  }
+
+  if (!GarminHrSource.isSupported()) {
+    $('#webbluetooth-warning')?.classList.remove('hidden');
+    $('#garmin-connect-btn').disabled = true;
+    $('#garmin-connect-btn-2').disabled = true;
+  }
+
+  if (!MacbookSensorSource.isSupported()) {
+    $('#macbook-hid-warning')?.classList.remove('hidden');
+    if ($('#macbook-connect-btn')) $('#macbook-connect-btn').disabled = true;
+    if ($('#macbook-connect-btn-2')) $('#macbook-connect-btn-2').disabled = true;
   }
 
   $('#connect-btn').addEventListener('click', connect);
+  $('#connect-btn-2')?.addEventListener('click', connect);
   $('#disconnect-btn').addEventListener('click', disconnect);
 
   setupOutputControls();
   setupFeatureReports();
+  setupSidebar();
   setupOscUi();
+  setupGarminUi();
+  setupMacbookUi();
+  oscInMonitor = setupOscInMonitor({
+    $,
+    $$,
+    loadConfig,
+    saveConfig,
+    getInSources: () => loadConfig().osc.inSources || [],
+    onDiscover: upsertIncomingSource,
+    onRename: renameIncomingSource,
+    onRemove: removeIncomingSource,
+  });
+  ensureGatewayConnection();
+  ensureAudioClock();
+  document.addEventListener('pointerdown', () => ensureAudioClock());
+  document.addEventListener('keydown', () => ensureAudioClock());
   checkExistingDevices();
 
   navigator.hid?.addEventListener('connect', checkExistingDevices);
   navigator.hid?.addEventListener('disconnect', onHidDisconnect);
 }
 
-const OSC_STORAGE_KEY = 'dualsense-osc-config';
-
-function loadOscConfig() {
-  try {
-    const raw = localStorage.getItem(OSC_STORAGE_KEY);
-    if (!raw) {
-      return {
-        host: '127.0.0.1',
-        port: 9000,
-        wsUrl: 'ws://127.0.0.1:8081',
-        hz: 60,
-        ignoreImu: true,
-        streaming: false,
-      };
-    }
-    const parsed = JSON.parse(raw);
-    return {
-      host: parsed.host || '127.0.0.1',
-      port: Number(parsed.port) || 9000,
-      wsUrl: parsed.wsUrl || 'ws://127.0.0.1:8081',
-      hz: Number(parsed.hz) || 60,
-      ignoreImu:
-        parsed.ignoreImu != null
-          ? !!parsed.ignoreImu
-          : parsed.ignoreAccel != null
-            ? !!parsed.ignoreAccel
-            : true,
-      streaming: !!parsed.streaming,
-    };
-  } catch {
-    return {
-      host: '127.0.0.1',
-      port: 9000,
-      wsUrl: 'ws://127.0.0.1:8081',
-      hz: 60,
-      ignoreImu: true,
-      streaming: false,
-    };
-  }
-}
-
-function saveOscConfig(partial = {}) {
-  const current = loadOscConfig();
-  const next = {
-    host: partial.host ?? current.host,
-    port: Number(partial.port ?? current.port),
-    wsUrl: partial.wsUrl ?? $('#osc-ws-url')?.value ?? current.wsUrl,
-    hz: Number(partial.hz ?? $('#osc-modal-hz')?.value ?? current.hz) || 60,
-    ignoreImu: partial.ignoreImu != null ? !!partial.ignoreImu : getOscIgnoreImu(),
-    streaming: partial.streaming != null ? !!partial.streaming : oscWantStream,
-  };
-  localStorage.setItem(OSC_STORAGE_KEY, JSON.stringify(next));
-  return next;
-}
-
 function getOscIgnoreImu() {
-  return !!($('#osc-modal-ignore-imu')?.checked || $('#osc-ignore-imu')?.checked);
+  return !!$('#controller-ignore-imu')?.checked;
 }
 
-function syncOscIgnoreImuCheckboxes(checked) {
-  if ($('#osc-modal-ignore-imu')) $('#osc-modal-ignore-imu').checked = checked;
-  if ($('#osc-ignore-imu')) $('#osc-ignore-imu').checked = checked;
+function applyControllerOptions() {
+  const ignoreImu = getOscIgnoreImu();
+  saveConfig({ controller: { ignoreImu } });
+  oscBridge?.setIgnoreImu(ignoreImu);
+  return ignoreImu;
 }
 
 function applyOscOptions() {
-  const ignoreImu = getOscIgnoreImu();
-  const hz = Number($('#osc-modal-hz')?.value || 60);
-  saveOscConfig({
-    ...getOscDestination(),
-    wsUrl: $('#osc-ws-url')?.value,
-    hz,
-    ignoreImu,
-    streaming: oscWantStream,
+  const hzVal = Number($('#osc-modal-hz')?.value || 60);
+  const inPort = Number($('#osc-modal-in-port')?.value || loadConfig().osc.inPort || 9001);
+  const dests = readDestinationsFromUi() || loadConfig().osc.destinations;
+  const osc = loadConfig().osc;
+  saveConfig({
+    osc: {
+      host: dests[0]?.host || '127.0.0.1',
+      port: dests[0]?.port || 57121,
+      destinations: dests,
+      routing: osc.routing || {},
+      wsUrl: $('#osc-ws-url')?.value,
+      inPort,
+      hz: hzVal,
+      streaming: oscWantStream,
+    },
   });
-  oscBridge?.setIgnoreImu(ignoreImu);
-  oscBridge?.setHz(hz);
-  return ignoreImu;
+  oscBridge?.setHz(hzVal);
+  oscBridge?.setIgnoreImu(getOscIgnoreImu());
+  pushDestinationsToGateway();
+}
+
+function updateOscDestLabel() {
+  const dests = loadConfig().osc.destinations || [];
+  const first = dests[0];
+  const text = !first
+    ? 'no destination'
+    : dests.length === 1
+      ? `${first.host}:${first.port}`
+      : `${first.host}:${first.port} +${dests.length - 1}`;
+  const el = $('#osc-dest-label');
+  if (el) el.textContent = text;
+  const display = $('#osc-dest-display');
+  if (display) display.value = dests.map((d) => `udp://${d.host}:${d.port}`).join(' · ');
+  updateOscInLabel();
+}
+
+function updateOscInLabel(port) {
+  const p = Number(port) || loadConfig().osc.inPort || 9001;
+  if ($('#osc-in-port')) $('#osc-in-port').textContent = `udp://0.0.0.0:${p}`;
+}
+
+function pushDestinationsToGateway() {
+  const osc = loadConfig().osc;
+  oscBridge?.setDestinations(osc.destinations, osc.routing, osc.inPort, osc.inSources);
+}
+
+function readDestinationsFromUi() {
+  const rows = [...document.querySelectorAll('#osc-dest-list .osc-dest-row')];
+  if (!rows.length) return null;
+  return rows.map((row, i) => ({
+    id: row.dataset.id || `d${i}`,
+    name: row.querySelector('.dest-name')?.value.trim() || (i === 0 ? 'Primary' : `Dest ${i + 1}`),
+    host: row.querySelector('.dest-host')?.value.trim() || '127.0.0.1',
+    port: Number(row.querySelector('.dest-port')?.value) || 57121,
+  }));
+}
+
+function renderDestinationEditor() {
+  const list = $('#osc-dest-list');
+  if (!list) return;
+  const dests = loadConfig().osc.destinations || [];
+  list.innerHTML = dests
+    .map(
+      (d) => `<div class="osc-dest-row" data-id="${d.id}">
+        <input class="dest-name text-input" placeholder="Name" value="${escapeAttr(d.name)}" />
+        <input class="dest-host text-input" placeholder="127.0.0.1" value="${escapeAttr(d.host)}" />
+        <input class="dest-port text-input" type="number" min="1" max="65535" value="${d.port}" />
+        <button type="button" class="dest-remove" ${dests.length < 2 ? 'disabled' : ''} aria-label="Remove">×</button>
+      </div>`,
+    )
+    .join('');
+  list.querySelectorAll('.dest-remove').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.closest('.osc-dest-row')?.dataset.id;
+      removeDestination(id);
+    });
+  });
+  list.querySelectorAll('.dest-name, .dest-host, .dest-port').forEach((input) => {
+    input.addEventListener('change', () => {
+      persistDestinationsFromUi();
+      renderRoutingMatrix();
+      pushDestinationsToGateway();
+    });
+  });
+  renderRoutingMatrix();
+}
+
+function persistDestinationsFromUi() {
+  const dests = readDestinationsFromUi();
+  if (!dests?.length) return null;
+  saveConfig({
+    osc: {
+      destinations: dests,
+      host: dests[0].host,
+      port: dests[0].port,
+    },
+  });
+  updateOscDestLabel();
+  return dests;
+}
+
+function escapeAttr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+function addDestination(host = '127.0.0.1', port = 57121) {
+  persistDestinationsFromUi();
+  const osc = loadConfig().osc;
+  const dests = [...(osc.destinations || []), { id: newDestId(), name: `Dest ${(osc.destinations || []).length + 1}`, host, port }];
+  saveConfig({ osc: { destinations: dests, host: dests[0].host, port: dests[0].port } });
+  renderDestinationEditor();
+  updateOscDestLabel();
+  pushDestinationsToGateway();
+}
+
+function removeDestination(id) {
+  persistDestinationsFromUi();
+  const osc = loadConfig().osc;
+  if ((osc.destinations || []).length < 2) return;
+  const dests = osc.destinations.filter((d) => d.id !== id);
+  const routing = pruneRouting(osc.routing, dests.map((d) => d.id));
+  saveConfig({ osc: { destinations: dests, routing, host: dests[0].host, port: dests[0].port } });
+  renderDestinationEditor();
+  updateOscDestLabel();
+  pushDestinationsToGateway();
+}
+
+function upsertIncomingSource(from) {
+  const addr = String(from || '').trim();
+  if (!addr || addr === 'unknown') return;
+  const osc = loadConfig().osc;
+  const id = inSourceId(addr);
+  const list = osc.inSources || [];
+  if (list.some((s) => s.id === id)) return;
+  saveConfig({ osc: { inSources: [...list, { id, from: addr, name: addr, endpoints: {} }] } });
+  renderRoutingMatrix();
+  renderInSourceNav();
+  oscInMonitor.renderSources?.();
+  pushDestinationsToGateway();
+}
+
+function renameIncomingSource(id, name) {
+  const osc = loadConfig().osc;
+  const list = (osc.inSources || []).map((s) =>
+    s.id === id ? { ...s, name: String(name || '').trim() || s.from } : s,
+  );
+  saveConfig({ osc: { inSources: list } });
+  renderRoutingMatrix();
+  renderInSourceNav();
+  oscInMonitor.renderSources?.();
+  oscInMonitor.render?.();
+  if (currentInSourceId() === id) renderInSourceView(id);
+}
+
+function removeIncomingSource(id) {
+  const osc = loadConfig().osc;
+  const list = (osc.inSources || []).filter((s) => s.id !== id);
+  const routing = { ...(osc.routing || {}) };
+  delete routing[id];
+  saveConfig({ osc: { inSources: list, routing } });
+  inLive.delete(id);
+  for (const key of [...inAuto.keys()]) {
+    if (key.startsWith(`${id}\0`)) inAuto.delete(key);
+  }
+  renderRoutingMatrix();
+  renderInSourceNav();
+  oscInMonitor.renderSources?.();
+  oscInMonitor.render?.();
+  pushDestinationsToGateway();
+  if (currentInSourceId() === id || loadConfig().ui.activeSection === id) {
+    setActiveSection('controller');
+  }
+}
+
+function renderRoutingMatrix() {
+  const table = $('#osc-routing-matrix');
+  if (!table) return;
+  const osc = loadConfig().osc;
+  const dests = osc.destinations || [];
+  const routing = osc.routing || {};
+  const sources = routingSources(osc.inSources);
+  table.innerHTML = `<thead><tr><th></th>${dests
+    .map((d) => `<th title="${escapeAttr(`${d.host}:${d.port}`)}">${escapeAttr(d.name || destLabel(d))}</th>`)
+    .join('')}</tr></thead><tbody>${sources
+    .map(
+      (src) => `<tr><th title="${escapeAttr(src.id)}">${escapeAttr(src.label)}</th>${dests
+        .map(
+          (d) => `<td><input type="checkbox" data-src="${escapeAttr(src.id)}" data-dest="${d.id}" ${
+            isRouted(routing, src.id, d.id) ? 'checked' : ''
+          } /></td>`,
+        )
+        .join('')}</tr>`,
+    )
+    .join('')}</tbody>`;
+  table.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+    box.addEventListener('change', () => {
+      const next = setRoute(loadConfig().osc.routing, box.dataset.src, box.dataset.dest, box.checked);
+      saveConfig({ osc: { routing: next } });
+      pushDestinationsToGateway();
+    });
+  });
+}
+
+function applyOscDestination() {
+  const err = $('#osc-modal-error');
+  const dests = persistDestinationsFromUi() || loadConfig().osc.destinations;
+  const inPort = Number($('#osc-modal-in-port')?.value);
+  for (const d of dests) {
+    if (!isValidHost(d.host) || !isValidPort(d.port)) {
+      if (err) {
+        err.textContent = 'Each destination needs a valid IP/hostname and port (1–65535).';
+        err.classList.remove('hidden');
+      }
+      return false;
+    }
+  }
+  if (!isValidPort(inPort)) {
+    if (err) {
+      err.textContent = 'OSC input port must be 1–65535.';
+      err.classList.remove('hidden');
+    }
+    return false;
+  }
+  if (err) err.classList.add('hidden');
+  applyOscOptions();
+  updateOscDestLabel();
+  return true;
+}
+
+function openOscConfigModal() {
+  const osc = loadConfig().osc;
+  if ($('#osc-modal-in-port')) $('#osc-modal-in-port').value = String(osc.inPort || 9001);
+  if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(osc.hz || 60);
+  if ($('#osc-ws-url')) $('#osc-ws-url').value = osc.wsUrl;
+  renderDestinationEditor();
+  $('#osc-modal-error')?.classList.add('hidden');
+  $('#osc-config-modal')?.classList.remove('hidden');
+}
+
+function closeOscConfigModal() {
+  $('#osc-config-modal')?.classList.add('hidden');
 }
 
 function isValidHost(host) {
@@ -135,74 +380,6 @@ function isValidHost(host) {
 function isValidPort(port) {
   const n = Number(port);
   return Number.isInteger(n) && n >= 1 && n <= 65535;
-}
-
-function getOscDestination() {
-  return {
-    host: ($('#osc-out-host')?.value || '127.0.0.1').trim(),
-    port: Number($('#osc-out-port')?.value || 9000),
-  };
-}
-
-function setOscDestinationFields(host, port, { syncModal = true, syncTab = true } = {}) {
-  if (syncTab) {
-    if ($('#osc-out-host')) $('#osc-out-host').value = host;
-    if ($('#osc-out-port')) $('#osc-out-port').value = String(port);
-  }
-  if (syncModal) {
-    if ($('#osc-modal-host')) $('#osc-modal-host').value = host;
-    if ($('#osc-modal-port')) $('#osc-modal-port').value = String(port);
-  }
-  updateOscDestLabel(host, port);
-  updateOscModalPreview();
-}
-
-function updateOscDestLabel(host, port) {
-  const el = $('#osc-dest-label');
-  if (el) el.textContent = `${host}:${port}`;
-  const display = $('#osc-dest-display');
-  if (display) display.value = `udp://${host}:${port}`;
-}
-
-function updateOscModalPreview() {
-  const host = ($('#osc-modal-host')?.value || '127.0.0.1').trim() || '127.0.0.1';
-  const port = $('#osc-modal-port')?.value || '9000';
-  const preview = $('#osc-modal-preview');
-  if (preview) preview.textContent = `udp://${host}:${port}`;
-}
-
-function applyOscDestination(host, port) {
-  const h = String(host).trim();
-  const p = Number(port);
-  const hz = Number($('#osc-modal-hz')?.value || 60);
-  const err = $('#osc-modal-error');
-
-  if (!isValidHost(h) || !isValidPort(p)) {
-    if (err) {
-      err.textContent = 'Enter a valid IP/hostname and port (1–65535).';
-      err.classList.remove('hidden');
-    }
-    return false;
-  }
-
-  if (err) err.classList.add('hidden');
-  setOscDestinationFields(h, p);
-  saveOscConfig({ host: h, port: p, hz, ignoreImu: getOscIgnoreImu(), streaming: oscWantStream });
-  oscBridge?.setDestination(h, p);
-  applyOscOptions();
-  return true;
-}
-
-function openOscConfigModal() {
-  const { host, port } = getOscDestination();
-  setOscDestinationFields(host, port);
-  $('#osc-modal-error')?.classList.add('hidden');
-  $('#osc-config-modal')?.classList.remove('hidden');
-  $('#osc-modal-host')?.focus();
-}
-
-function closeOscConfigModal() {
-  $('#osc-config-modal')?.classList.add('hidden');
 }
 
 function updateOscHeaderButton() {
@@ -225,21 +402,18 @@ function updateOscHeaderButton() {
       : 'Click to start OSC streaming';
 }
 
-function startOscStreaming() {
-  const saved = loadOscConfig();
-  const url = ($('#osc-ws-url')?.value || saved.wsUrl || 'ws://127.0.0.1:8081').trim();
-  oscWantStream = true;
-  saveOscConfig({ streaming: true, wsUrl: url });
-
-  if (oscBridge) {
-    oscBridge.disconnect();
-    oscBridge = null;
-  }
-
-  oscBridge = new OscBridge({
+function createOscBridge(url) {
+  const saved = loadConfig();
+  return new OscBridge({
     wsUrl: url,
-    hz: Number($('#osc-modal-hz')?.value || saved.hz || 60),
+    hz: Number($('#osc-modal-hz')?.value || saved.osc.hz || 60),
     onStatus: updateOscStatus,
+    onGateway: onGatewayMessage,
+    onIncoming: (msg) => {
+      if (msg.from) upsertIncomingSource(msg.from);
+      noteIncomingEndpoint(msg);
+      oscInMonitor.push(msg);
+    },
     onControl: (address, args) => {
       const handled = applyOscControl(controller, address, args);
       const argStr = args.map((a) => (typeof a === 'object' ? a.value : a)).join(' ');
@@ -251,13 +425,62 @@ function startOscStreaming() {
       if (handled) syncOutputUiFromController();
     },
   });
+}
 
-  const { host, port } = getOscDestination();
-  const hz = Number($('#osc-modal-hz')?.value || 60);
-  oscBridge.setDestination(host, port);
-  oscBridge.setHz(hz);
-  oscBridge.setIgnoreImu(getOscIgnoreImu());
-  oscBridge.connect();
+function ensureGatewayConnection() {
+  const saved = loadConfig();
+  const url = ($('#osc-ws-url')?.value || saved.osc.wsUrl || 'ws://127.0.0.1:8081').trim();
+  if (!oscBridge) {
+    oscBridge = createOscBridge(url);
+    const osc = saved.osc;
+    oscBridge.setHz(Number($('#osc-modal-hz')?.value || 60));
+    oscBridge.setIgnoreImu(getOscIgnoreImu());
+    oscBridge.setDestinations(osc.destinations, osc.routing, osc.inPort, osc.inSources);
+    oscBridge.connect();
+  }
+  if (oscWantStream) oscBridge.setEnabled(true);
+  return oscBridge;
+}
+
+function onGatewayMessage(msg) {
+  if (msg.type === 'hello' && msg.macbook) {
+    if (macbook?._want && msg.macbook.available && !macbookUsingNative) {
+      oscBridge?.send({ type: 'macbook', enabled: true, ...macbookOptionsFromUi() });
+    }
+  }
+  if (msg.type === 'macbook-status') {
+    macbookUsingNative = !!msg.connected;
+    if (macbook) macbook._want = !!msg.connected || !!msg.connecting;
+    if (macbookNativeWait) {
+      const resolve = macbookNativeWait;
+      macbookNativeWait = null;
+      resolve(!!msg.connected);
+    }
+    onMacbookStatus({
+      connected: !!msg.connected,
+      connecting: !!msg.connecting,
+      sources: msg.sources || (msg.connected ? ['Lid angle'] : []),
+      error: msg.error || '',
+    });
+  }
+  if (msg.type === 'macbook-sample') {
+    if (!macbookUsingNative) {
+      macbookUsingNative = true;
+      if (macbook) macbook._want = true;
+      onMacbookStatus({ connected: true, sources: msg.sources || ['Lid angle'] });
+    }
+    onMacbookSample(msg);
+  }
+}
+
+function startOscStreaming() {
+  ensureAudioClock();
+  const saved = loadConfig();
+  const url = ($('#osc-ws-url')?.value || saved.osc.wsUrl || 'ws://127.0.0.1:8081').trim();
+  oscWantStream = true;
+  saveConfig({ osc: { streaming: true, wsUrl: url } });
+
+  ensureGatewayConnection();
   oscBridge.setEnabled(true);
 
   if ($('#osc-enable')) {
@@ -272,20 +495,17 @@ function startOscStreaming() {
 
 function stopOscStreaming() {
   oscWantStream = false;
-  saveOscConfig({ streaming: false });
+  saveConfig({ osc: { streaming: false } });
   oscBridge?.setEnabled(false);
-  oscBridge?.disconnect();
-  oscBridge = null;
-  oscGwConnected = false;
 
   if ($('#osc-enable')) {
     $('#osc-enable').checked = false;
-    $('#osc-enable').disabled = true;
+    $('#osc-enable').disabled = false;
   }
   if ($('#osc-disconnect-btn')) $('#osc-disconnect-btn').disabled = true;
   if ($('#osc-connect-btn')) $('#osc-connect-btn').disabled = false;
 
-  updateOscStatus({ connected: false, enabled: false });
+  updateOscStatus({ connected: !!oscBridge?.ws && oscBridge.ws.readyState === 1, enabled: false });
 }
 
 function toggleOscStreaming() {
@@ -294,23 +514,21 @@ function toggleOscStreaming() {
 }
 
 function setupOscUi() {
-  const saved = loadOscConfig();
-  setOscDestinationFields(saved.host, saved.port);
-  if ($('#osc-ws-url')) $('#osc-ws-url').value = saved.wsUrl;
-  if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(saved.hz || 60);
-  syncOscIgnoreImuCheckboxes(saved.ignoreImu);
+  const saved = loadConfig();
+  if ($('#osc-ws-url')) $('#osc-ws-url').value = saved.osc.wsUrl;
+  if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(saved.osc.hz || 60);
+  if ($('#osc-modal-in-port')) $('#osc-modal-in-port').value = String(saved.osc.inPort || 9001);
+  if ($('#controller-ignore-imu')) $('#controller-ignore-imu').checked = saved.controller.ignoreImu;
+  updateOscDestLabel();
+  updateOscInLabel();
   updateOscHeaderButton();
+  renderDestinationEditor();
 
   $('#osc-stream-btn')?.addEventListener('click', toggleOscStreaming);
   $('#osc-config-open')?.addEventListener('click', openOscConfigModal);
   $('#osc-config-open-tab')?.addEventListener('click', openOscConfigModal);
 
-  const onIgnoreImuChange = (e) => {
-    syncOscIgnoreImuCheckboxes(e.target.checked);
-    applyOscOptions();
-  };
-  $('#osc-modal-ignore-imu')?.addEventListener('change', onIgnoreImuChange);
-  $('#osc-ignore-imu')?.addEventListener('change', onIgnoreImuChange);
+  $('#controller-ignore-imu')?.addEventListener('change', applyControllerOptions);
 
   $$('[data-close-osc-modal]').forEach((el) => {
     el.addEventListener('click', closeOscConfigModal);
@@ -322,27 +540,10 @@ function setupOscUi() {
     }
   });
 
-  $('#osc-modal-host')?.addEventListener('input', updateOscModalPreview);
-  $('#osc-modal-port')?.addEventListener('input', updateOscModalPreview);
-
-  $$('[data-osc-preset]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const [host, port] = btn.dataset.oscPreset.split(':');
-      setOscDestinationFields(host, port, { syncTab: false });
-      $('#osc-modal-error')?.classList.add('hidden');
-    });
-  });
+  $('#osc-dest-add')?.addEventListener('click', () => addDestination());
 
   $('#osc-modal-apply')?.addEventListener('click', () => {
-    const ok = applyOscDestination($('#osc-modal-host').value, $('#osc-modal-port').value);
-    if (ok) closeOscConfigModal();
-  });
-
-  $('#osc-modal-host')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') $('#osc-modal-apply')?.click();
-  });
-  $('#osc-modal-port')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') $('#osc-modal-apply')?.click();
+    if (applyOscDestination()) closeOscConfigModal();
   });
 
   $('#osc-connect-btn')?.addEventListener('click', () => startOscStreaming());
@@ -353,7 +554,7 @@ function setupOscUi() {
     else {
       oscBridge?.setEnabled(false);
       oscWantStream = false;
-      saveOscConfig({ streaming: false });
+      saveConfig({ osc: { streaming: false } });
       updateOscHeaderButton();
     }
   });
@@ -364,7 +565,7 @@ function setupOscUi() {
     if ($('#osc-recv')) $('#osc-recv').textContent = String(oscBridge.stats.recvMessages);
   }, 500);
 
-  if (saved.streaming) {
+  if (saved.osc.streaming) {
     setTimeout(() => startOscStreaming(), 150);
   }
 }
@@ -379,15 +580,1181 @@ function updateOscStatus({ connected, enabled, oscIn, error }) {
   if ($('#osc-status')) $('#osc-status').textContent = parts.join(' · ');
   if (oscIn?.port && $('#osc-in-port')) {
     $('#osc-in-port').textContent = `udp://0.0.0.0:${oscIn.port}`;
+  } else {
+    updateOscInLabel();
   }
-  const { host, port } = getOscDestination();
-  updateOscDestLabel(host, port);
+  updateOscDestLabel();
   updateOscHeaderButton();
 
   if (connected && oscWantStream && oscBridge && !oscBridge.enabled) {
     oscBridge.setEnabled(true);
-    if ($('#osc-enable')) $('#osc-enable').checked = true;
   }
+  if ($('#osc-enable')) {
+    $('#osc-enable').disabled = !connected;
+    $('#osc-enable').checked = !!(oscWantStream && connected);
+  }
+}
+
+function setupSidebar() {
+  const saved = loadConfig();
+  const sidebar = $('#sidebar');
+
+  if (saved.ui.sidebarCollapsed) sidebar?.classList.add('collapsed');
+
+  setupInSourceNav();
+  setActiveSection(saved.ui.activeSection || 'controller', { persist: false });
+
+  for (const [id, open] of Object.entries(saved.ui.sectionsOpen || {})) {
+    const section = $(`.nav-section[data-section="${id}"]`);
+    section?.classList.toggle('folded', !open);
+  }
+
+  $('#sidebar-toggle')?.addEventListener('click', () => {
+    const collapsed = !sidebar.classList.contains('collapsed');
+    sidebar.classList.toggle('collapsed', collapsed);
+    saveConfig({ ui: { sidebarCollapsed: collapsed } });
+  });
+
+  $$('.nav-select').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setActiveSection(btn.dataset.section);
+    });
+  });
+
+  $$('.nav-fold').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.fold;
+      const section = $(`.nav-section[data-section="${id}"]`);
+      const folded = !section.classList.contains('folded');
+      section.classList.toggle('folded', folded);
+      const cfg = loadConfig();
+      saveConfig({
+        ui: {
+          sectionsOpen: {
+            ...cfg.ui.sectionsOpen,
+            [id]: !folded,
+          },
+        },
+      });
+    });
+  });
+}
+
+function setActiveSection(id, { persist = true } = {}) {
+  const isIn = String(id || '').startsWith('in:');
+  $$('.nav-section').forEach((el) => {
+    el.classList.toggle('active', el.dataset.section === id);
+  });
+  $('#view-controller')?.classList.toggle('hidden', id !== 'controller');
+  $('#view-garmin')?.classList.toggle('hidden', id !== 'garmin');
+  $('#view-macbook')?.classList.toggle('hidden', id !== 'macbook');
+  $('#view-insource')?.classList.toggle('hidden', !isIn);
+  if (persist) saveConfig({ ui: { activeSection: id } });
+  if (id === 'garmin') requestAnimationFrame(drawGarminOscCharts);
+  if (id === 'macbook') requestAnimationFrame(drawMacbookOscCharts);
+  if (isIn) {
+    renderInSourceView(id);
+    startInSourceCharts();
+  } else {
+    stopInSourceCharts();
+  }
+}
+
+function currentInSourceId() {
+  const id = loadConfig().ui.activeSection;
+  return String(id || '').startsWith('in:') ? id : null;
+}
+
+function fmtVals(vals) {
+  return (
+    (vals || [])
+      .map((v) => {
+        if (typeof v === 'boolean') return v ? 'true' : 'false';
+        if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(3);
+        return String(v);
+      })
+      .join(' ') || '—'
+  );
+}
+
+function autoKey(sourceId, address) {
+  return `${sourceId}\0${address}`;
+}
+
+function endpointSpec(sourceId, address) {
+  const src = (loadConfig().osc.inSources || []).find((s) => s.id === sourceId);
+  return src?.endpoints?.[address] || { mode: 'off', min: 0, max: 1 };
+}
+
+function isEndpointOpen(sourceId, address) {
+  return !!loadConfig().ui.inEndpointOpen?.[sourceId]?.[address];
+}
+
+function setEndpointOpen(sourceId, address, open) {
+  const prev = loadConfig().ui.inEndpointOpen || {};
+  saveConfig({
+    ui: {
+      inEndpointOpen: {
+        ...prev,
+        [sourceId]: { ...(prev[sourceId] || {}), [address]: !!open },
+      },
+    },
+  });
+}
+
+function mergeAutoRange(sourceId, address, rawVals, msgMin, msgMax) {
+  const key = autoKey(sourceId, address);
+  let range = inAuto.get(key) || null;
+  for (const v of rawVals || []) range = observeRange(range, asNumber(v) ?? v);
+  if (msgMin != null) range = observeRange(range, msgMin);
+  if (msgMax != null) range = observeRange(range, msgMax);
+  if (range) inAuto.set(key, range);
+  return range;
+}
+
+function computeOutVals(rawVals, spec, observed) {
+  return argVals(transformArgs(rawVals, spec, observed).args);
+}
+
+function refreshLiveOut(sourceId, address) {
+  const slot = inLive.get(sourceId)?.get(address);
+  if (!slot) return;
+  const spec = endpointSpec(sourceId, address);
+  const observed = inAuto.get(autoKey(sourceId, address)) || {
+    min: slot.autoMin,
+    max: slot.autoMax,
+  };
+  slot.out = computeOutVals(slot.raw, spec, observed);
+  slot.autoMin = observed?.min;
+  slot.autoMax = observed?.max;
+  if (slot.series?.length) {
+    const last = slot.series[slot.series.length - 1];
+    last.out = firstNumber(slot.out);
+  }
+  if (currentInSourceId() === sourceId) patchInSourceRow(address, slot, sourceId);
+}
+
+function setupInSourceNav() {
+  const host = $('#nav-insources');
+  if (!host) return;
+  host.addEventListener('click', (e) => {
+    const del = e.target.closest('.nav-in-del');
+    if (del) {
+      e.preventDefault();
+      e.stopPropagation();
+      removeIncomingSource(del.dataset.id);
+      return;
+    }
+    const sel = e.target.closest('.nav-select');
+    if (sel) setActiveSection(sel.dataset.section);
+  });
+  $('#insource-name')?.addEventListener('change', (e) => {
+    const id = currentInSourceId();
+    if (id) renameIncomingSource(id, e.target.value);
+  });
+  setupInSourceView();
+  renderInSourceNav();
+}
+
+function setupInSourceView() {
+  const root = $('#insource-endpoints');
+  if (!root || root._bound) return;
+  root._bound = true;
+  root.addEventListener('click', (e) => {
+    const id = currentInSourceId();
+    if (!id) return;
+    const modeBtn = e.target.closest('.insource-modes button');
+    if (modeBtn) {
+      const address = modeBtn.parentElement.dataset.addr;
+      setEndpointSpec(id, address, { mode: modeBtn.dataset.mode });
+      refreshLiveOut(id, address);
+      renderInSourceView(id);
+      return;
+    }
+    const reset = e.target.closest('.insource-reset');
+    if (reset) {
+      const address = reset.closest('.insource-ep')?.dataset.addr;
+      if (!address) return;
+      inAuto.delete(autoKey(id, address));
+      setEndpointSpec(id, address, { mode: 'auto', resetAuto: true });
+      refreshLiveOut(id, address);
+      renderInSourceView(id);
+      return;
+    }
+    const head = e.target.closest('.insource-ep-head');
+    if (head) {
+      const row = head.closest('.insource-ep');
+      const address = row?.dataset.addr;
+      if (!address) return;
+      const open = !row.classList.contains('open');
+      row.classList.toggle('open', open);
+      setEndpointOpen(id, address, open);
+      if (open) requestAnimationFrame(drawInSourceCharts);
+    }
+  });
+  root.addEventListener('change', (e) => {
+    const input = e.target.closest('.insource-min, .insource-max');
+    if (!input) return;
+    const id = currentInSourceId();
+    const row = input.closest('.insource-ep');
+    const address = row?.dataset.addr;
+    if (!id || !address) return;
+    if (endpointSpec(id, address).mode !== 'manual') return;
+    setEndpointSpec(id, address, {
+      min: Number(row.querySelector('.insource-min')?.value),
+      max: Number(row.querySelector('.insource-max')?.value),
+    });
+    refreshLiveOut(id, address);
+  });
+}
+
+function renderInSourceNav() {
+  const host = $('#nav-insources');
+  if (!host) return;
+  const sources = loadConfig().osc.inSources || [];
+  const active = loadConfig().ui.activeSection;
+  host.innerHTML = sources
+    .map(
+      (s) => `<section class="nav-section ${s.id === active ? 'active' : ''}" data-section="${escapeAttr(s.id)}">
+        <div class="nav-section-head">
+          <button type="button" class="nav-select" data-section="${escapeAttr(s.id)}" title="${escapeAttr(s.from)}">
+            <span class="nav-icon">IN</span>
+            <span class="nav-label">${escapeHtml(s.name || s.from)}</span>
+            <span class="nav-dot" data-in-dot="${escapeAttr(s.id)}"></span>
+          </button>
+          <button type="button" class="nav-in-del" data-id="${escapeAttr(s.id)}" aria-label="Remove source">×</button>
+        </div>
+      </section>`,
+    )
+    .join('');
+}
+
+function ensureIncomingEndpoint(sourceId, address) {
+  if (!sourceId || !address) return false;
+  const osc = loadConfig().osc;
+  const src = (osc.inSources || []).find((s) => s.id === sourceId);
+  if (!src) return false;
+  if (src.endpoints?.[address]) return false;
+  const list = (osc.inSources || []).map((s) => {
+    if (s.id !== sourceId) return s;
+    return { ...s, endpoints: { ...(s.endpoints || {}), [address]: { mode: 'off', min: 0, max: 1 } } };
+  });
+  saveConfig({ osc: { inSources: list } });
+  pushDestinationsToGateway();
+  return true;
+}
+
+function setEndpointSpec(sourceId, address, patch) {
+  const osc = loadConfig().osc;
+  const list = (osc.inSources || []).map((s) => {
+    if (s.id !== sourceId) return s;
+    const cur = s.endpoints?.[address] || { mode: 'off', min: 0, max: 1 };
+    return { ...s, endpoints: { ...(s.endpoints || {}), [address]: { ...cur, ...patch } } };
+  });
+  saveConfig({ osc: { inSources: list } });
+  const oscNext = loadConfig().osc;
+  let sources = oscNext.inSources;
+  if (patch.resetAuto) {
+    sources = sources.map((s) => {
+      if (s.id !== sourceId) return s;
+      const endpoints = { ...(s.endpoints || {}) };
+      if (endpoints[address]) endpoints[address] = { ...endpoints[address], resetAuto: true };
+      return { ...s, endpoints };
+    });
+  }
+  oscBridge?.setDestinations(oscNext.destinations, oscNext.routing, oscNext.inPort, sources);
+}
+
+function noteIncomingEndpoint(msg) {
+  const id = msg.sourceId || (msg.from ? inSourceId(msg.from) : '');
+  const address = String(msg.address || '');
+  if (!id || !address) return;
+  let map = inLive.get(id);
+  if (!map) {
+    map = new Map();
+    inLive.set(id, map);
+  }
+  const prev = map.get(address);
+  const raw = argVals(msg.args);
+  const spec = endpointSpec(id, address);
+  const observed = mergeAutoRange(id, address, raw, msg.autoMin, msg.autoMax);
+  const out = computeOutVals(raw, spec, observed);
+  const now = performance.now();
+  const series = prev?.series ? prev.series.slice() : [];
+  const rv = firstNumber(raw);
+  if (rv != null) {
+    series.push({ t: now, raw: rv, out: firstNumber(out) });
+    const cutoff = now - GARMIN_CHART_WINDOW_MS - 1000;
+    while (series.length > 1 && series[1].t < cutoff) series.shift();
+  }
+  map.set(address, {
+    raw,
+    out,
+    autoMin: observed?.min,
+    autoMax: observed?.max,
+    series,
+  });
+  const added = ensureIncomingEndpoint(id, address);
+  const dot = document.querySelector(`[data-in-dot="${CSS.escape(id)}"]`);
+  if (dot) {
+    dot.classList.add('connected');
+    clearTimeout(dot._liveTimer);
+    dot._liveTimer = setTimeout(() => dot.classList.remove('connected'), 2000);
+  }
+  if (currentInSourceId() !== id) return;
+  if (added) renderInSourceView(id);
+  else patchInSourceRow(address, map.get(address), id);
+}
+
+function patchInSourceRow(address, live, sourceId) {
+  const row = [...document.querySelectorAll('#insource-endpoints .insource-ep')].find(
+    (el) => el.dataset.addr === address,
+  );
+  if (!row) {
+    renderInSourceView(sourceId);
+    return;
+  }
+  const rawEl = row.querySelector('.insource-raw');
+  const outEl = row.querySelector('.insource-out');
+  if (rawEl) rawEl.textContent = fmtVals(live.raw);
+  if (outEl) outEl.textContent = fmtVals(live.out);
+  const spec = endpointSpec(sourceId, address);
+  if (spec.mode === 'auto') {
+    const minEl = row.querySelector('.insource-min');
+    const maxEl = row.querySelector('.insource-max');
+    if (minEl && live.autoMin != null) minEl.value = String(live.autoMin);
+    if (maxEl && live.autoMax != null) maxEl.value = String(live.autoMax);
+  }
+}
+
+function renderInSourceView(id) {
+  const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
+  if (!src) {
+    setActiveSection('controller');
+    return;
+  }
+  const nameEl = $('#insource-name');
+  if (nameEl && document.activeElement !== nameEl) nameEl.value = src.name || src.from;
+  if ($('#insource-from')) $('#insource-from').textContent = src.from;
+  const root = $('#insource-endpoints');
+  if (!root) return;
+  const liveMap = inLive.get(id) || new Map();
+  const addrs = [...new Set([...Object.keys(src.endpoints || {}), ...liveMap.keys()])].sort();
+  if (!addrs.length) {
+    root.innerHTML = '<p class="osc-hint">Waiting for incoming OSC endpoints…</p>';
+    return;
+  }
+  root.innerHTML = addrs
+    .map((address) => {
+      const spec = src.endpoints?.[address] || { mode: 'off', min: 0, max: 1 };
+      const live = liveMap.get(address) || {};
+      const minVal = spec.mode === 'auto' && live.autoMin != null ? live.autoMin : spec.min;
+      const maxVal = spec.mode === 'auto' && live.autoMax != null ? live.autoMax : spec.max;
+      const auto = spec.mode === 'auto';
+      const open = isEndpointOpen(id, address);
+      const showRange = spec.mode !== 'off';
+      return `<div class="panel insource-ep ${open ? 'open' : ''}" data-addr="${escapeAttr(address)}">
+        <button type="button" class="insource-ep-head">
+          <span class="insource-ep-caret">▾</span>
+          <span class="insource-ep-addr">${escapeHtml(address)}</span>
+          <span class="insource-ep-vals">
+            <span>in <strong class="insource-raw">${escapeHtml(fmtVals(live.raw))}</strong></span>
+            <span>out <strong class="insource-out">${escapeHtml(fmtVals(live.out))}</strong></span>
+          </span>
+        </button>
+        <div class="insource-ep-body">
+          <div class="insource-ep-norm">
+            <div class="insource-modes" data-addr="${escapeAttr(address)}">
+              <button type="button" data-mode="off" class="${spec.mode === 'off' ? 'active' : ''}">Off</button>
+              <button type="button" data-mode="auto" class="${spec.mode === 'auto' ? 'active' : ''}">Auto 0–1</button>
+              <button type="button" data-mode="manual" class="${spec.mode === 'manual' ? 'active' : ''}">Manual 0–1</button>
+            </div>
+            <div class="nav-row insource-range" ${showRange ? '' : 'hidden'}>
+              <div class="control-group">
+                <label>${auto ? 'Detected min' : 'Min'}</label>
+                <input class="text-input insource-min" type="number" step="any" ${auto ? 'readonly' : ''} value="${minVal ?? ''}" />
+              </div>
+              <div class="control-group">
+                <label>${auto ? 'Detected max' : 'Max'}</label>
+                <input class="text-input insource-max" type="number" step="any" ${auto ? 'readonly' : ''} value="${maxVal ?? ''}" />
+              </div>
+              <button type="button" class="insource-reset" ${auto ? '' : 'hidden'}>Reset range</button>
+            </div>
+          </div>
+          <div class="insource-ep-chart-wrap">
+            <div class="insource-ep-legend">
+              <span class="leg-raw">raw</span>
+              ${spec.mode !== 'off' ? '<span class="leg-norm">0–1</span>' : ''}
+            </div>
+            <canvas class="hr-chart insource-ep-chart" data-ep-chart="${escapeAttr(address)}"></canvas>
+          </div>
+        </div>
+      </div>`;
+    })
+    .join('');
+  requestAnimationFrame(drawInSourceCharts);
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function garminOptionsFromUi() {
+  return {
+    trendWindowSec: Number($('#garmin-trend-window')?.value || 30),
+    trendRangeBpm: Number($('#garmin-trend-range')?.value || 20),
+    trendSmooth: !!$('#garmin-trend-smooth')?.checked,
+    trendSmoothSec: Number($('#garmin-trend-smooth-sec')?.value || 2),
+    normalizeHr: !!$('#garmin-normalize-hr')?.checked,
+    hrMin: Number($('#garmin-hr-min')?.value || 40),
+    hrMax: Number($('#garmin-hr-max')?.value || 200),
+    sendBeats: !!$('#garmin-send-beats')?.checked,
+  };
+}
+
+function persistGarminOptions() {
+  const prev = loadConfig().garmin;
+  const opts = garminOptionsFromUi();
+  saveConfig({ garmin: opts });
+  garmin?.setOptions(opts);
+  updateGarminHrRangeVisibility();
+  updateGarminTrendSmoothVisibility();
+  if (
+    prev.normalizeHr !== opts.normalizeHr ||
+    prev.hrMin !== opts.hrMin ||
+    prev.hrMax !== opts.hrMax
+  ) {
+    garminOsc.hr = [];
+  }
+  if (opts.trendSmooth) {
+    ensureAudioClock().then(() => syncGarminTrendTick());
+  } else {
+    syncGarminTrendTick();
+  }
+  return opts;
+}
+
+function updateGarminHrRangeVisibility() {
+  const on = !!$('#garmin-normalize-hr')?.checked;
+  $('#garmin-hr-range')?.classList.toggle('hidden', !on);
+}
+
+function updateGarminTrendSmoothVisibility() {
+  const on = !!$('#garmin-trend-smooth')?.checked;
+  $('#garmin-trend-smooth-sec-wrap')?.classList.toggle('hidden', !on);
+}
+
+function syncGarminTrendTick() {
+  syncAudioTicks();
+}
+
+function syncAudioTicks() {
+  const on = !!(garmin?.connected && garmin.trendSmooth) || !!macbook?.connected;
+  audioClock?.setTick(on ? 30 : 0);
+}
+
+function setupGarminUi() {
+  const saved = loadConfig().garmin;
+  if ($('#garmin-trend-window')) $('#garmin-trend-window').value = String(saved.trendWindowSec);
+  if ($('#garmin-trend-range')) $('#garmin-trend-range').value = String(saved.trendRangeBpm);
+  if ($('#garmin-trend-smooth')) $('#garmin-trend-smooth').checked = !!saved.trendSmooth;
+  if ($('#garmin-trend-smooth-sec')) $('#garmin-trend-smooth-sec').value = String(saved.trendSmoothSec ?? 2);
+  if ($('#garmin-normalize-hr')) $('#garmin-normalize-hr').checked = !!saved.normalizeHr;
+  if ($('#garmin-hr-min')) $('#garmin-hr-min').value = String(saved.hrMin);
+  if ($('#garmin-hr-max')) $('#garmin-hr-max').value = String(saved.hrMax);
+  if ($('#garmin-send-beats')) $('#garmin-send-beats').checked = saved.sendBeats !== false;
+  updateGarminHrRangeVisibility();
+  updateGarminTrendSmoothVisibility();
+
+  garmin = new GarminHrSource({
+    onSample: onGarminSample,
+    onBeat: onGarminBeat,
+    onStatus: onGarminStatus,
+  });
+  garmin.setOptions(saved);
+
+  $('#garmin-connect-btn')?.addEventListener('click', connectGarmin);
+  $('#garmin-connect-btn-2')?.addEventListener('click', connectGarmin);
+  $('#garmin-disconnect-btn')?.addEventListener('click', () => disconnectGarmin({ forget: true }));
+
+  [
+    '#garmin-trend-window',
+    '#garmin-trend-range',
+    '#garmin-trend-smooth-sec',
+    '#garmin-hr-min',
+    '#garmin-hr-max',
+  ].forEach((sel) => {
+    $(sel)?.addEventListener('change', persistGarminOptions);
+  });
+  $('#garmin-trend-smooth')?.addEventListener('change', persistGarminOptions);
+  $('#garmin-normalize-hr')?.addEventListener('change', persistGarminOptions);
+  $('#garmin-send-beats')?.addEventListener('change', persistGarminOptions);
+
+  if (saved.deviceId || saved.autoConnect) {
+    setTimeout(() => {
+      garmin.reconnect(saved.deviceId).catch(() => {});
+    }, 250);
+  }
+}
+
+function macbookOptionsFromUi() {
+  return {
+    closedDeg: Number($('#macbook-closed-deg')?.value || 12),
+    angleMax: Number($('#macbook-angle-max')?.value || 180),
+  };
+}
+
+function persistMacbookOptions() {
+  const opts = macbookOptionsFromUi();
+  saveConfig({ macbook: opts });
+  macbook?.setOptions(opts);
+  if (macbookUsingNative) {
+    oscBridge?.send({ type: 'macbook', enabled: true, ...opts });
+  }
+  return opts;
+}
+
+function setupMacbookUi() {
+  const saved = loadConfig().macbook || {};
+  if ($('#macbook-closed-deg')) $('#macbook-closed-deg').value = String(saved.closedDeg ?? 12);
+  if ($('#macbook-angle-max')) $('#macbook-angle-max').value = String(saved.angleMax ?? 180);
+
+  macbook = new MacbookSensorSource({
+    onSample: onMacbookSample,
+    onStatus: onMacbookStatus,
+  });
+  macbook.setOptions(saved);
+
+  $('#macbook-connect-btn')?.addEventListener('click', connectMacbook);
+  $('#macbook-connect-btn-2')?.addEventListener('click', connectMacbook);
+  $('#macbook-disconnect-btn')?.addEventListener('click', () => disconnectMacbook({ forget: true }));
+  $('#macbook-closed-deg')?.addEventListener('change', persistMacbookOptions);
+  $('#macbook-angle-max')?.addEventListener('change', persistMacbookOptions);
+
+  if (saved.autoConnect) {
+    setTimeout(() => connectMacbook(), 400);
+  }
+}
+
+async function connectGarmin() {
+  await ensureAudioClock();
+  try {
+    const device = await garmin.connect();
+    saveConfig({
+      garmin: {
+        ...garminOptionsFromUi(),
+        deviceId: device.id,
+        autoConnect: true,
+      },
+    });
+  } catch (err) {
+    if (err?.name !== 'NotFoundError') console.error(err);
+  }
+}
+
+async function disconnectGarmin({ forget = false } = {}) {
+  await garmin?.disconnect();
+  if (forget) {
+    saveConfig({ garmin: { autoConnect: false, deviceId: '' } });
+  }
+}
+
+async function connectMacbook() {
+  persistMacbookOptions();
+  if (macbook) macbook._want = true;
+  onMacbookStatus({ connecting: true, connected: false });
+
+  ensureGatewayConnection();
+  const open = await oscBridge.waitUntilOpen(1800);
+  if (open) {
+    const nativeOk = await requestNativeLid();
+    if (nativeOk) {
+      saveConfig({ macbook: { ...macbookOptionsFromUi(), autoConnect: true } });
+      return;
+    }
+  }
+
+  await ensureAudioClock();
+  try {
+    const ok = await macbook.connect();
+    saveConfig({ macbook: { ...macbookOptionsFromUi(), autoConnect: !!ok } });
+    syncAudioTicks();
+  } catch (err) {
+    if (err?.name !== 'NotFoundError' && err?.name !== 'NotAllowedError') console.error(err);
+  }
+}
+
+function requestNativeLid() {
+  return new Promise((resolve) => {
+    macbookNativeWait = resolve;
+    const sent = oscBridge?.send({ type: 'macbook', enabled: true, ...macbookOptionsFromUi() });
+    if (!sent) {
+      macbookNativeWait = null;
+      resolve(false);
+      return;
+    }
+    setTimeout(() => {
+      if (macbookNativeWait === resolve) {
+        macbookNativeWait = null;
+        resolve(!!macbookUsingNative);
+      }
+    }, 1200);
+  });
+}
+
+async function disconnectMacbook({ forget = false } = {}) {
+  if (macbookUsingNative) {
+    oscBridge?.send({ type: 'macbook', enabled: false });
+    macbookUsingNative = false;
+  }
+  await macbook?.disconnect();
+  syncAudioTicks();
+  if (forget) saveConfig({ macbook: { autoConnect: false } });
+}
+
+function onMacbookStatus({ connected, connecting, sources, error }) {
+  const text = connecting
+    ? 'Connecting…'
+    : connected
+      ? (sources?.filter(Boolean).join(' · ') || 'Connected')
+      : 'Disconnected';
+  if ($('#macbook-status-text')) $('#macbook-status-text').textContent = text;
+  $('#macbook-status-dot')?.classList.toggle('connected', !!connected);
+  $('#macbook-status-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  $('#macbook-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#macbook-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+
+  if ($('#macbook-connect-btn')) $('#macbook-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#macbook-disconnect-btn')) $('#macbook-disconnect-btn').disabled = !macbook?._want && !connected;
+  if ($('#macbook-connect-btn-2')) $('#macbook-connect-btn-2').disabled = !!connected || !!connecting;
+
+  if ($('#macbook-error')) $('#macbook-error').textContent = error || '';
+  if ($('#macbook-overlay-title')) {
+    $('#macbook-overlay-title').textContent = connecting ? 'Connecting…' : 'No MacBook sensors';
+  }
+
+  $('#macbook-disconnected')?.classList.toggle('hidden', !!connected);
+  $('#macbook-live')?.classList.toggle('hidden', !connected);
+  if ($('#macbook-device-name') && sources?.length) {
+    $('#macbook-device-name').textContent = sources.join(' · ');
+  }
+
+  syncAudioTicks();
+  if (connected) startMacbookCharts();
+  else if (!connecting) {
+    stopMacbookCharts();
+    macbookOsc.angle = [];
+    macbookOsc.open = [];
+  }
+}
+
+function onMacbookSample(sample) {
+  const now = sample.t || performance.now();
+  if (sample.lidAngle != null) {
+    if ($('#macbook-angle-value')) $('#macbook-angle-value').textContent = `${sample.lidAngle.toFixed(1)}°`;
+    if ($('#chart-mac-angle-value')) $('#chart-mac-angle-value').textContent = sample.lidAngle.toFixed(1);
+    const lid = $('#mac-lid-graphic');
+    if (lid) lid.style.transform = `rotate(${-Math.min(180, sample.lidAngle)}deg)`;
+    pushSeries(macbookOsc.angle, sample.lidAngle, now);
+  }
+  if (sample.lidOpen != null) {
+    if ($('#macbook-open-value')) $('#macbook-open-value').textContent = sample.lidOpen ? 'open' : 'closed';
+    if ($('#chart-mac-open-value')) $('#chart-mac-open-value').textContent = String(sample.lidOpen);
+    pushSeries(macbookOsc.open, sample.lidOpen, now);
+  }
+  if (sample.lidNorm != null && $('#macbook-norm-value')) {
+    $('#macbook-norm-value').textContent = sample.lidNorm.toFixed(3);
+  }
+  if (sample.als != null && $('#macbook-als-value')) {
+    $('#macbook-als-value').textContent = String(Math.round(sample.als));
+  }
+
+  const hasImu = !!(sample.accel || sample.gyro);
+  $('#macbook-imu-panel')?.classList.toggle('hidden', !hasImu);
+  if (sample.accel) {
+    const mag = Math.hypot(sample.accel.x, sample.accel.y, sample.accel.z);
+    if ($('#macbook-accel-mag')) $('#macbook-accel-mag').textContent = mag.toFixed(3);
+    if ($('#mac-accel-x')) $('#mac-accel-x').textContent = sample.accel.x.toFixed(3);
+    if ($('#mac-accel-y')) $('#mac-accel-y').textContent = sample.accel.y.toFixed(3);
+    if ($('#mac-accel-z')) $('#mac-accel-z').textContent = sample.accel.z.toFixed(3);
+  }
+  if (sample.gyro) {
+    if ($('#mac-gyro-x')) $('#mac-gyro-x').textContent = sample.gyro.x.toFixed(2);
+    if ($('#mac-gyro-y')) $('#mac-gyro-y').textContent = sample.gyro.y.toFixed(2);
+    if ($('#mac-gyro-z')) $('#mac-gyro-z').textContent = sample.gyro.z.toFixed(2);
+  }
+
+  const messages = [];
+  if (sample.lidAngle != null) messages.push({ address: '/mac/lid/angle', args: [sample.lidAngle] });
+  if (sample.lidOpen != null) messages.push({ address: '/mac/lid/open', args: [sample.lidOpen] });
+  if (sample.lidNorm != null) messages.push({ address: '/mac/lid/norm', args: [sample.lidNorm] });
+  if (sample.accel) {
+    messages.push(
+      { address: '/mac/accel/x', args: [sample.accel.x] },
+      { address: '/mac/accel/y', args: [sample.accel.y] },
+      { address: '/mac/accel/z', args: [sample.accel.z] },
+    );
+  }
+  if (sample.gyro) {
+    messages.push(
+      { address: '/mac/gyro/x', args: [sample.gyro.x] },
+      { address: '/mac/gyro/y', args: [sample.gyro.y] },
+      { address: '/mac/gyro/z', args: [sample.gyro.z] },
+    );
+  }
+  if (sample.als != null) messages.push({ address: '/mac/als', args: [sample.als] });
+  if (messages.length) oscBridge?.sendMessages(messages, { source: 'macbook' });
+}
+
+function onAudioTick() {
+  onGarminTrendTick();
+  macbook?.poll();
+}
+
+function onGarminStatus({ connected, connecting, reconnecting, name }) {
+  const text = reconnecting
+    ? 'Reconnecting…'
+    : connecting
+      ? 'Connecting…'
+      : connected
+        ? (name || 'Connected')
+        : 'Disconnected';
+  if ($('#garmin-status-text')) $('#garmin-status-text').textContent = text;
+  $('#garmin-status-dot')?.classList.toggle('connected', !!connected);
+  $('#garmin-status-dot')?.classList.toggle('connecting', !!(connecting || reconnecting) && !connected);
+  $('#garmin-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#garmin-nav-dot')?.classList.toggle('connecting', !!(connecting || reconnecting) && !connected);
+
+  $('#garmin-connect-btn').disabled = !!connected || !!connecting;
+  $('#garmin-disconnect-btn').disabled = !garmin?._wantConnect;
+  if ($('#garmin-connect-btn-2')) $('#garmin-connect-btn-2').disabled = !!connected || !!connecting;
+
+  if ($('#garmin-overlay-title')) {
+    $('#garmin-overlay-title').textContent = reconnecting
+      ? 'Reconnecting to Garmin…'
+      : 'No heart rate broadcast';
+  }
+
+  $('#garmin-disconnected')?.classList.toggle('hidden', !!connected);
+  $('#garmin-live')?.classList.toggle('hidden', !connected);
+  if ($('#garmin-device-name') && name) $('#garmin-device-name').textContent = name;
+  syncGarminTrendTick();
+  if (connected) {
+    startGarminCharts();
+  } else if (!reconnecting) {
+    stopGarminCharts();
+    garminOsc.hr = [];
+    garminOsc.trend = [];
+    garminOsc.beat = [];
+    garminBeatsSent = 0;
+    if ($('#garmin-hr-value')) $('#garmin-hr-value').textContent = '—';
+    if ($('#chart-hr-value')) $('#chart-hr-value').textContent = '—';
+    if ($('#chart-trend-value')) $('#chart-trend-value').textContent = '—';
+    if ($('#chart-beat-value')) $('#chart-beat-value').textContent = '0';
+  }
+}
+
+function onGarminSample({ hr, trendDelta, name }) {
+  const opts = garminOptionsFromUi();
+  const hrOsc = hrToOsc(hr, opts);
+  const trendOsc = opts.trendSmooth
+    ? garmin.stepTrend(opts.trendRangeBpm)
+    : trendToOsc(trendDelta, opts.trendRangeBpm);
+  const now = performance.now();
+
+  if ($('#garmin-hr-value')) $('#garmin-hr-value').textContent = String(Math.round(hr));
+  if ($('#garmin-device-name') && name) $('#garmin-device-name').textContent = name;
+  updateGarminTrendUi(trendOsc, trendDelta);
+
+  if ($('#garmin-osc-hr')) {
+    $('#garmin-osc-hr').textContent = opts.normalizeHr ? hrOsc.toFixed(3) : String(Math.round(hr));
+  }
+  if ($('#chart-hr-value')) {
+    $('#chart-hr-value').textContent = opts.normalizeHr ? hrOsc.toFixed(3) : hrOsc.toFixed(1);
+  }
+
+  pushGarminOsc('hr', hrOsc, now);
+  if (!opts.trendSmooth) pushGarminOsc('trend', trendOsc, now);
+
+  const messages = [{ address: '/garmin/hr', args: [hrOsc] }];
+  if (!opts.trendSmooth) messages.push({ address: '/garmin/trend', args: [trendOsc] });
+  oscBridge?.sendMessages(messages, { source: 'garmin' });
+}
+
+function onGarminTrendTick() {
+  if (!garmin?.connected || !garmin.trendSmooth) return;
+  const opts = garminOptionsFromUi();
+  const trendOsc = garmin.stepTrend(opts.trendRangeBpm);
+  const trendDelta = garmin.getTrendDelta();
+  const now = performance.now();
+  updateGarminTrendUi(trendOsc, trendDelta);
+  pushGarminOsc('trend', trendOsc, now);
+  oscBridge?.sendMessages([{ address: '/garmin/trend', args: [trendOsc] }], { source: 'garmin' });
+}
+
+function updateGarminTrendUi(trendOsc, trendDelta) {
+  if ($('#garmin-trend-value')) $('#garmin-trend-value').textContent = trendOsc.toFixed(3);
+  if ($('#garmin-trend-delta')) {
+    const sign = trendDelta > 0 ? '+' : '';
+    $('#garmin-trend-delta').textContent = `${sign}${Number(trendDelta).toFixed(1)}`;
+  }
+  if ($('#chart-trend-value')) $('#chart-trend-value').textContent = trendOsc.toFixed(3);
+}
+
+function onGarminBeat(value = 1) {
+  if (value === 0) {
+    pushGarminOsc('beat', 0);
+    oscBridge?.sendTrigger('/garmin/push_beat', 0, { source: 'garmin' });
+    if ($('#chart-beat-value')) $('#chart-beat-value').textContent = '0';
+    return;
+  }
+
+  garminBeatsSent++;
+  if ($('#garmin-beats')) $('#garmin-beats').textContent = String(garminBeatsSent);
+  if ($('#chart-beat-value')) $('#chart-beat-value').textContent = '1';
+
+  const pulse = $('#garmin-beat-pulse');
+  if (pulse) {
+    pulse.classList.remove('pulse');
+    void pulse.offsetWidth;
+    pulse.classList.add('pulse');
+    clearTimeout(garminBeatPulseTimer);
+    garminBeatPulseTimer = setTimeout(() => pulse.classList.remove('pulse'), 400);
+  }
+
+  if (!$('#garmin-send-beats')?.checked) return;
+  pushGarminOsc('beat', 1);
+  oscBridge?.sendTrigger('/garmin/push_beat', 1, { source: 'garmin' });
+}
+
+async function ensureAudioClock() {
+  if (!audioClock) {
+    audioClock = new AudioClock({
+      onPulse: (v) => onGarminBeat(v),
+      onTick: onAudioTick,
+    });
+  }
+  try {
+    await audioClock.start();
+    garmin?.setAudioClock(audioClock);
+    audioClock.resume();
+    syncAudioTicks();
+  } catch (err) {
+    console.warn('Audio clock unavailable; background beats may throttle', err);
+  }
+  return audioClock;
+}
+
+function pushGarminOsc(key, value, t = performance.now()) {
+  garminOsc[key].push({ t, v: Number(value) });
+  const cutoff = t - GARMIN_CHART_WINDOW_MS - 1000;
+  const series = garminOsc[key];
+  while (series.length > 1 && series[1].t < cutoff) series.shift();
+}
+
+function pushSeries(series, value, t = performance.now()) {
+  series.push({ t, v: Number(value) });
+  const cutoff = t - GARMIN_CHART_WINDOW_MS - 1000;
+  while (series.length > 1 && series[1].t < cutoff) series.shift();
+}
+
+function startMacbookCharts() {
+  stopMacbookCharts();
+  drawMacbookOscCharts();
+  macbookChartTimer = setInterval(drawMacbookOscCharts, 80);
+}
+
+function stopMacbookCharts() {
+  if (macbookChartTimer) {
+    clearInterval(macbookChartTimer);
+    macbookChartTimer = null;
+  }
+}
+
+function startInSourceCharts() {
+  stopInSourceCharts();
+  drawInSourceCharts();
+  inChartTimer = setInterval(drawInSourceCharts, 80);
+}
+
+function stopInSourceCharts() {
+  if (inChartTimer) {
+    clearInterval(inChartTimer);
+    inChartTimer = null;
+  }
+}
+
+function drawInSourceCharts() {
+  const id = currentInSourceId();
+  if (!id) return;
+  const liveMap = inLive.get(id) || new Map();
+  const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
+  $('#insource-endpoints')
+    ?.querySelectorAll('.insource-ep.open canvas.insource-ep-chart')
+    .forEach((canvas) => {
+      const address = canvas.dataset.epChart;
+      const slot = liveMap.get(address);
+      const spec = src?.endpoints?.[address];
+      const series = slot?.series || [];
+      drawOscTimeChart(
+        canvas,
+        series.map((s) => ({ t: s.t, v: s.raw })),
+        {
+          now: performance.now(),
+          color: '#ff8c00',
+          minSpan: 0,
+          digits: 2,
+          overlay:
+            spec && spec.mode !== 'off'
+              ? series
+                  .filter((s) => Number.isFinite(s.out))
+                  .map((s) => ({ t: s.t, v: s.out }))
+              : null,
+          overlayColor: '#ffd200',
+        },
+      );
+    });
+}
+
+function drawMacbookOscCharts() {
+  const now = performance.now();
+  drawOscTimeChart($('#macbook-chart-angle'), macbookOsc.angle, {
+    now,
+    color: '#ff8c00',
+    yMin: 0,
+    yMax: Number($('#macbook-angle-max')?.value || 180),
+    digits: 0,
+  });
+  drawOscTimeChart($('#macbook-chart-open'), macbookOsc.open, {
+    now,
+    color: '#ffd200',
+    yMin: 0,
+    yMax: 1,
+    digits: 0,
+  });
+}
+
+function startGarminCharts() {
+  stopGarminCharts();
+  drawGarminOscCharts();
+  garminChartTimer = setInterval(drawGarminOscCharts, 80);
+}
+
+function stopGarminCharts() {
+  if (garminChartTimer) {
+    clearInterval(garminChartTimer);
+    garminChartTimer = null;
+  }
+}
+
+function drawGarminOscCharts() {
+  const now = performance.now();
+  const opts = garminOptionsFromUi();
+  drawOscTimeChart($('#garmin-chart-hr'), garminOsc.hr, {
+    now,
+    color: '#ff8c00',
+    yMin: opts.normalizeHr ? 0 : null,
+    yMax: opts.normalizeHr ? 1 : null,
+    mid: opts.normalizeHr ? 0.5 : null,
+    digits: opts.normalizeHr ? 2 : 0,
+  });
+  drawOscTimeChart($('#garmin-chart-trend'), garminOsc.trend, {
+    now,
+    color: '#ffc078',
+    yMin: 0,
+    yMax: 1,
+    mid: 0.5,
+    digits: 2,
+  });
+  drawOscTimeChart($('#garmin-chart-beat'), garminOsc.beat, {
+    now,
+    color: '#ffd200',
+    yMin: 0,
+    yMax: 1,
+    impulses: true,
+    digits: 0,
+  });
+}
+
+function drawOscTimeChart(canvas, samples, {
+  now,
+  color,
+  yMin = null,
+  yMax = null,
+  mid = null,
+  impulses = false,
+  digits = 2,
+  minSpan = 8,
+  overlay = null,
+  overlayColor = '#ffd200',
+} = {}) {
+  if (!canvas || canvas.clientWidth < 8) return;
+  const dpr = devicePixelRatio || 1;
+  const w = (canvas.width = canvas.clientWidth * dpr);
+  const h = (canvas.height = canvas.clientHeight * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+
+  const windowMs = GARMIN_CHART_WINDOW_MS;
+  const t0 = now - windowMs;
+  const padT = 6 * dpr;
+  const padB = 6 * dpr;
+  const padL = 36 * dpr;
+  const padR = (overlay?.length ? 28 : 8) * dpr;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+
+  const xAt = (t) => padL + ((t - t0) / windowMs) * plotW;
+  const yAt = (v, min, max) => padT + (1 - (v - min) / (max - min || 1)) * plotH;
+
+  ctx.strokeStyle = '#272727';
+  ctx.lineWidth = dpr;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT);
+  ctx.lineTo(padL, h - padB);
+  ctx.lineTo(w - padR, h - padB);
+  ctx.stroke();
+
+  const inWindow = samples.filter((s) => s.t >= t0 - 2000);
+  if (!inWindow.length) {
+    drawChartLabels(ctx, dpr, padL, padT, h - padB, yMin ?? 0, yMax ?? 1, digits);
+    return;
+  }
+
+  let min = yMin;
+  let max = yMax;
+  if (min == null || max == null) {
+    const vals = inWindow.map((s) => s.v).filter((v) => Number.isFinite(v));
+    min = vals.length ? Math.min(...vals) : 0;
+    max = vals.length ? Math.max(...vals) : 1;
+    if (minSpan > 0 && max - min < minSpan) {
+      const midVal = (min + max) / 2;
+      min = midVal - minSpan / 2;
+      max = midVal + minSpan / 2;
+    }
+    const pad = (max - min) * 0.12 || 1;
+    min -= pad;
+    max += pad;
+  }
+
+  if (mid != null) {
+    ctx.strokeStyle = 'rgba(255, 140, 0, 0.28)';
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.beginPath();
+    const y = yAt(mid, min, max);
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (impulses) {
+    const minBar = Math.max(3 * dpr, plotW * 0.006);
+    ctx.fillStyle = color;
+    for (const s of inWindow) {
+      if (s.v <= 0 || s.t < t0 || s.t > now) continue;
+      const x = xAt(s.t);
+      const y1 = yAt(1, min, max);
+      const y0 = yAt(0, min, max);
+      ctx.fillRect(x - minBar / 2, y1, minBar, y0 - y1);
+    }
+    drawChartLabels(ctx, dpr, padL, padT, h - padB, min, max, digits);
+    return;
+  }
+
+  const points = [];
+  const first = inWindow[0];
+  points.push({ t: Math.max(t0, first.t), v: first.v });
+  for (let i = 1; i < inWindow.length; i++) {
+    const s = inWindow[i];
+    if (s.t < t0) continue;
+    points.push({ t: s.t, v: inWindow[i - 1].v });
+    points.push({ t: s.t, v: s.v });
+  }
+  const last = inWindow[inWindow.length - 1];
+  points.push({ t: now, v: last.v });
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padL, padT, plotW, plotH);
+  ctx.clip();
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2 * dpr;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = xAt(p.t);
+    const y = yAt(p.v, min, max);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.12;
+  ctx.lineTo(xAt(now), yAt(min, min, max));
+  ctx.lineTo(xAt(points[0].t), yAt(min, min, max));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+
+  if (overlay?.length) {
+    const oWin = overlay.filter((s) => s.t >= t0 - 2000 && Number.isFinite(s.v));
+    if (oWin.length) {
+      const oPoints = [];
+      oPoints.push({ t: Math.max(t0, oWin[0].t), v: oWin[0].v });
+      for (let i = 1; i < oWin.length; i++) {
+        oPoints.push({ t: oWin[i].t, v: oWin[i - 1].v });
+        oPoints.push({ t: oWin[i].t, v: oWin[i].v });
+      }
+      oPoints.push({ t: now, v: oWin[oWin.length - 1].v });
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, plotW, plotH);
+      ctx.clip();
+      ctx.strokeStyle = overlayColor;
+      ctx.lineWidth = 1.75 * dpr;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      oPoints.forEach((p, i) => {
+        const x = xAt(p.t);
+        const y = yAt(p.v, 0, 1);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.fillStyle = overlayColor;
+    ctx.font = `${11 * dpr}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText('1', w - 4 * dpr, padT);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('0', w - 4 * dpr, h - padB);
+    ctx.textAlign = 'left';
+  }
+
+  drawChartLabels(ctx, dpr, padL, padT, h - padB, min, max, digits);
+}
+
+function drawChartLabels(ctx, dpr, x, yTop, yBot, min, max, digits) {
+  ctx.fillStyle = '#8f8f8f';
+  ctx.font = `${11 * dpr}px 'JetBrains Mono', monospace`;
+  ctx.textBaseline = 'top';
+  ctx.fillText(formatChartTick(max, digits), 4 * dpr, yTop);
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(formatChartTick(min, digits), 4 * dpr, yBot);
+}
+
+function formatChartTick(v, digits) {
+  if (!Number.isFinite(v)) return '—';
+  return digits <= 0 ? String(Math.round(v)) : v.toFixed(digits);
 }
 
 function syncOutputUiFromController() {
@@ -522,13 +1889,11 @@ async function connect() {
 }
 
 async function checkExistingDevices() {
-  if (controller) return;
+  if (!navigator.hid) return;
   const devices = await navigator.hid.getDevices();
-  for (const device of devices) {
-    if (DualSenseDevice.isDualSense(device)) {
-      await openDevice(device);
-      return;
-    }
+  if (!controller) {
+    const ds = devices.find((d) => DualSenseDevice.isDualSense(d));
+    if (ds) await openDevice(ds);
   }
 }
 
@@ -576,13 +1941,16 @@ function onHidDisconnect(e) {
   if (controller && e.device === controller.device) {
     disconnect();
   }
+  macbook?.handleHidDisconnect(e.device);
 }
 
 function updateConnectionUI(connected) {
   $('#connect-btn').disabled = connected;
   $('#disconnect-btn').disabled = !connected;
+  if ($('#connect-btn-2')) $('#connect-btn-2').disabled = connected;
   const dot = $('#status-dot');
   dot.classList.toggle('connected', connected);
+  $('#controller-nav-dot')?.classList.toggle('connected', connected);
   $('#status-text').textContent = connected ? 'Connected' : 'Disconnected';
 }
 
@@ -687,13 +2055,13 @@ function drawStick(ctx, canvas, x, y) {
 
   ctx.clearRect(0, 0, w, h);
 
-  ctx.strokeStyle = '#2a3142';
+  ctx.strokeStyle = '#272727';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = '#1a1f2a';
+  ctx.strokeStyle = '#111111';
   ctx.beginPath();
   ctx.moveTo(cx - radius, cy);
   ctx.lineTo(cx + radius, cy);
@@ -704,12 +2072,12 @@ function drawStick(ctx, canvas, x, y) {
   const px = cx + x * radius * 0.85;
   const py = cy + y * radius * 0.85;
 
-  ctx.fillStyle = 'rgba(0, 112, 243, 0.25)';
+  ctx.fillStyle = 'rgba(255, 140, 0, 0.25)';
   ctx.beginPath();
   ctx.arc(px, py, radius * 0.35, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = '#0070f3';
+  ctx.fillStyle = '#ff8c00';
   ctx.beginPath();
   ctx.arc(px, py, radius * 0.12, 0, Math.PI * 2);
   ctx.fill();
@@ -721,10 +2089,10 @@ function updateTouchpad(touches) {
   const w = (canvas.width = canvas.clientWidth * devicePixelRatio);
   const h = (canvas.height = canvas.clientHeight * devicePixelRatio);
 
-  ctx.fillStyle = '#1e2430';
+  ctx.fillStyle = '#080808';
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = '#2a3142';
+  ctx.strokeStyle = '#272727';
   ctx.lineWidth = 2;
   ctx.strokeRect(4, 4, w - 8, h - 8);
 
@@ -734,7 +2102,7 @@ function updateTouchpad(touches) {
     return;
   }
 
-  const colors = ['#0070f3', '#22c55e'];
+  const colors = ['#ff8c00', '#ffd200'];
   touches.forEach((t, i) => {
     const info = `#touch${i}-info`;
     if (!t.active) {
@@ -798,7 +2166,7 @@ function drawMotionChart(canvas, data) {
   const max = Math.max(...data);
   const range = max - min || 1;
 
-  ctx.strokeStyle = '#0070f3';
+  ctx.strokeStyle = '#ff8c00';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   data.forEach((v, i) => {
@@ -847,4 +2215,7 @@ window.addEventListener('resize', () => {
     drawStick(stickCanvases.left.ctx, stickCanvases.left.canvas, 0, 0);
     drawStick(stickCanvases.right.ctx, stickCanvases.right.canvas, 0, 0);
   }
+  drawGarminOscCharts();
+  drawMacbookOscCharts();
+  drawInSourceCharts();
 });
