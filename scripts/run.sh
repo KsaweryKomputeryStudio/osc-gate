@@ -23,10 +23,10 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo "==> pad-to-osc"
+echo "==> osc-gate"
 echo "    OSC gateway  →  ws://127.0.0.1:8081"
 echo "    Web UI       →  http://localhost:5173"
-echo "    OSC out/in   →  udp :9000 / :9001  (change in UI)"
+echo "    OSC out/in   →  udp :57121 / :9001  (change in UI)"
 echo
 echo "Press Ctrl+C to stop both services."
 echo

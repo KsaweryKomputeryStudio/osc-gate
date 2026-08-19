@@ -9,7 +9,7 @@ cd "$ROOT"
 
 echo "==> OSC gateway"
 echo "    ws://127.0.0.1:8081"
-echo "    out udp://127.0.0.1:9000  in udp://0.0.0.0:9001"
+echo "    out udp://127.0.0.1:57121  in udp://0.0.0.0:9001"
 echo
 
 npm run gateway

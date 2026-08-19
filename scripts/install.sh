@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> pad-to-osc install"
+echo "==> osc-gate install"
 echo "    $ROOT"
 echo
 
@@ -28,5 +28,4 @@ npm install
 
 echo
 echo "Done."
-echo "Run the app:  ./scripts/run.sh"
-echo "Or:           npm run run:mac"
+echo "Run the app:  ./run"
