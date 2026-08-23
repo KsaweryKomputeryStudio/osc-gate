@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Permissions-Policy" content="accelerometer=(self), gyroscope=(self), ambient-light-sensor=(self)" />
+    <meta http-equiv="Permissions-Policy" content="accelerometer=(self), gyroscope=(self), ambient-light-sensor=(self), midi=(self)" />
     <title>osc-gate</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/styles.css" />
@@ -80,7 +80,7 @@
           </div>
 
           <div class="control-group">
-            <label for="osc-modal-hz">Controller send rate (Hz)</label>
+            <label for="osc-modal-hz">DualSense send rate (Hz)</label>
             <input type="number" id="osc-modal-hz" class="text-input" min="1" max="120" value="60" />
           </div>
 
@@ -176,6 +176,157 @@
             <div class="hr-device" id="poll-hero-name">—</div>
           </div>
         </div>
+        <div id="view-midi" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="midi-status-dot"></span>
+                <span id="midi-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="midi-connect-btn" class="primary">Connect</button>
+                <button id="midi-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="midi-device">Input</label>
+                <select id="midi-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="midi-channel">Channel</label>
+                <select id="midi-channel" class="text-input">
+                  <option value="0">All</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                  <option value="7">7</option>
+                  <option value="8">8</option>
+                  <option value="9">9</option>
+                  <option value="10">10</option>
+                  <option value="11">11</option>
+                  <option value="12">12</option>
+                  <option value="13">13</option>
+                  <option value="14">14</option>
+                  <option value="15">15</option>
+                  <option value="16">16</option>
+                </select>
+              </div>
+            </div>
+            <div class="nav-actions">
+              <button type="button" id="midi-learn-btn">Learn</button>
+              <button type="button" id="midi-clear-learned">Clear learned</button>
+            </div>
+            <p class="osc-hint" id="midi-learn-hint">Learn: click, then play a note or move a CC. It becomes a Signals row.</p>
+          </div>
+          <div id="midi-warning" class="warning-banner hidden">
+            Web MIDI is not available in this browser. Use Chrome or Edge on desktop (https or localhost).
+          </div>
+          <div id="midi-disconnected" class="disconnected-overlay">
+            <h2 id="midi-overlay-title">No MIDI input</h2>
+            <p>Connect a keyboard, knob box, or IAC Driver, then Connect. Notes, velocity, gate, pitch, clock BPM, and learned CCs go out as <code>/midi/1/…</code>.</p>
+            <button id="midi-connect-btn-2" class="primary" type="button">Connect MIDI</button>
+          </div>
+          <div id="midi-live" class="hidden">
+            <div class="hr-hero panel">
+              <div class="hr-value" id="midi-note-name">—</div>
+              <div class="hr-unit" id="midi-note-unit">Note</div>
+              <div class="hr-device" id="midi-device-name">—</div>
+            </div>
+            <div class="stats-row hr-stats">
+              <div class="stat">
+                <div class="stat-value" id="midi-vel-value">0.00</div>
+                <div class="stat-label">Velocity</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="midi-gate-value">0</div>
+                <div class="stat-label">Gate</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="midi-bpm-value">—</div>
+                <div class="stat-label">BPM</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="midi-pitch-value">0.00</div>
+                <div class="stat-label">Pitch</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="view-gamepad" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="pad-status-dot"></span>
+                <span id="pad-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="pad-connect-btn" class="primary">Connect</button>
+                <button id="pad-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="pad-device">Gamepad</label>
+                <select id="pad-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="pad-deadzone">Stick deadzone</label>
+                <input type="range" id="pad-deadzone" min="0" max="0.3" step="0.01" value="0.08" />
+              </div>
+            </div>
+            <p class="osc-hint">Press a button on the pad if it does not appear. DualSense pads stay on the DualSense source.</p>
+          </div>
+          <div id="pad-warning" class="warning-banner hidden">
+            The Gamepad API is not available in this browser. Use Chrome or Edge on desktop.
+          </div>
+          <div id="pad-disconnected" class="disconnected-overlay">
+            <h2 id="pad-overlay-title">No gamepad</h2>
+            <p>Plug in any standard pad, press a button, then Connect. Sticks, triggers, and buttons go out as <code>/pad/1/…</code>.</p>
+            <button id="pad-connect-btn-2" class="primary" type="button">Connect gamepad</button>
+          </div>
+          <div id="pad-live" class="hidden">
+            <div class="hr-hero panel">
+              <div class="hr-value" id="pad-hero-value">—</div>
+              <div class="hr-unit">Last button</div>
+              <div class="hr-device" id="pad-device-name">—</div>
+            </div>
+            <div class="pad-buttons" id="pad-button-grid"></div>
+            <div class="sticks-row">
+              <div class="stick-panel">
+                <h3>Left stick</h3>
+                <canvas id="pad-stick-left" class="stick-canvas"></canvas>
+                <div class="stick-values">
+                  <span id="pad-lx">X 0.50</span>
+                  <span id="pad-ly">Y 0.50</span>
+                </div>
+              </div>
+              <div class="stick-panel">
+                <h3>Right stick</h3>
+                <canvas id="pad-stick-right" class="stick-canvas"></canvas>
+                <div class="stick-values">
+                  <span id="pad-rx">X 0.50</span>
+                  <span id="pad-ry">Y 0.50</span>
+                </div>
+              </div>
+            </div>
+            <div class="stats-row">
+              <div class="stat">
+                <div class="stat-value" id="pad-l2-value">0.00</div>
+                <div class="stat-label">L2</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="pad-r2-value">0.00</div>
+                <div class="stat-label">R2</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="view-controller" class="view hidden">
           <div class="source-settings panel">
             <div class="source-settings-bar">
@@ -198,12 +349,12 @@
           </div>
 
           <div id="disconnected-view" class="disconnected-overlay">
-            <h2>No controller connected</h2>
+            <h2>No DualSense connected</h2>
             <p>
               Plug in a DualSense via USB or pair over Bluetooth, then Connect.
               OSC destination is global — use the header to start streaming.
             </p>
-            <button id="connect-btn-2" class="primary" type="button">Connect Controller</button>
+            <button id="connect-btn-2" class="primary" type="button">Connect DualSense</button>
           </div>
 
           <div id="main-content" class="hidden">

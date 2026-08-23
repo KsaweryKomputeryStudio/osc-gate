@@ -1,12 +1,14 @@
 import { DualSenseDevice, normalizeStick, normalizeTrigger } from './dualsense.js';
 import { OscBridge, applyOscControl } from './oscBridge.js';
 import { loadConfig, saveConfig } from './config.js';
-import { getInstance, listInstances } from './session.js';
+import { getInstance, listInstances, patchInstance } from './session.js';
 import { instancePrefix, rewriteAddress } from './sourceCatalog.js';
 import { setupOutCharts } from './outCharts.js';
-import { getSignalSpec, onSignalsChanged, processOutgoing } from './signals.js';
-import { fillSourceSignals, hideSourceSignals, setupSourceSignals } from './signalTable.js';
+import { defaultSignalMode, getSignalSpec, onSignalsChanged, processOutgoing, setSignalSpec } from './signals.js';
+import { fillSourceSignals, hideSourceSignals, setupSourceSignals, showSourceSignals } from './signalTable.js';
 import { setupSourceStudio, setTypeDot } from './sourceStudio.js';
+import { MidiSource, noteName } from './midiSource.js';
+import { GamepadSource, bindGamepadSource, listGamepads, unbindGamepadSource } from './gamepadSource.js';
 import { GarminHrSource, hrToOsc, trendToOsc } from './garminHr.js';
 import { MacbookSensorSource } from './macbookSensors.js';
 import { GeoMap, readBrowserLocation } from './geoMap.js';
@@ -79,6 +81,26 @@ let humanCountAuto = null;
 let sourceStudio = null;
 let outCharts = null;
 
+const midiById = new Map();
+const padById = new Map();
+const padLast = new Map();
+const padStick = { left: null, right: null };
+const PAD_CHIPS = [
+  ['button/a', 'A'],
+  ['button/b', 'B'],
+  ['button/x', 'X'],
+  ['button/y', 'Y'],
+  ['button/l1', 'L1'],
+  ['button/r1', 'R1'],
+  ['button/select', 'Sel'],
+  ['button/start', 'Start'],
+  ['dpad/up', '↑'],
+  ['dpad/down', '↓'],
+  ['dpad/left', '←'],
+  ['dpad/right', '→'],
+  ['button/home', 'Home'],
+];
+
 const stickCanvases = {
   left: { canvas: $('#stick-left'), ctx: null },
   right: { canvas: $('#stick-right'), ctx: null },
@@ -121,6 +143,18 @@ function init() {
     if ($('#human-connect-btn-2')) $('#human-connect-btn-2').disabled = true;
   }
 
+  if (!MidiSource.isSupported()) {
+    $('#midi-warning')?.classList.remove('hidden');
+    if ($('#midi-connect-btn')) $('#midi-connect-btn').disabled = true;
+    if ($('#midi-connect-btn-2')) $('#midi-connect-btn-2').disabled = true;
+  }
+
+  if (!GamepadSource.isSupported()) {
+    $('#pad-warning')?.classList.remove('hidden');
+    if ($('#pad-connect-btn')) $('#pad-connect-btn').disabled = true;
+    if ($('#pad-connect-btn-2')) $('#pad-connect-btn-2').disabled = true;
+  }
+
   $('#connect-btn').addEventListener('click', connect);
   $('#connect-btn-2')?.addEventListener('click', connect);
   $('#disconnect-btn').addEventListener('click', disconnect);
@@ -134,6 +168,8 @@ function init() {
   setupMicUi();
   setupTimeUi();
   setupHumanUi();
+  setupMidiUi();
+  setupGamepadUi();
   oscInMonitor = setupOscInMonitor({
     $,
     $$,
@@ -153,6 +189,7 @@ function init() {
     setActiveSection,
     oscBridge,
     outCharts,
+    onRemove: onSourceRemoved,
   });
   setupSidebar();
   onSignalsChanged((id) => {
@@ -717,12 +754,45 @@ function sendType(type, messages) {
   sourceStudio?.sendFrom(inst, messages);
 }
 
+function sendInstance(inst, messages) {
+  if (!inst || !messages?.length) return;
+  sourceStudio?.sendFrom(inst, messages);
+}
+
 function sendTriggerType(type, address, value) {
   const inst = instanceOfType(type);
   if (!inst) return;
   const addr = rewriteAddress(inst, address);
   outCharts?.push(inst.id, [{ address: addr, args: [Number(value)] }]);
   oscBridge?.sendTrigger(addr, value, { source: inst.id });
+}
+
+function sendTriggerInst(inst, address, value) {
+  if (!inst) return;
+  const addr = rewriteAddress(inst, address);
+  outCharts?.push(inst.id, [{ address: addr, args: [Number(value)] }]);
+  oscBridge?.sendTrigger(addr, value, { source: inst.id });
+}
+
+function setSourceDot(id, { connected, connecting } = {}) {
+  const el = document.querySelector(`[data-src-dot="${id}"]`);
+  el?.classList.toggle('connected', !!connected);
+  el?.classList.toggle('connecting', !!connecting && !connected);
+}
+
+function onSourceRemoved(id) {
+  const midi = midiById.get(id);
+  if (midi) {
+    midi.disconnect();
+    midiById.delete(id);
+  }
+  const pad = padById.get(id);
+  if (pad) {
+    pad.disconnect();
+    unbindGamepadSource(id);
+    padById.delete(id);
+    padLast.delete(id);
+  }
 }
 
 function setActiveSection(id, { persist = true } = {}) {
@@ -732,7 +802,7 @@ function setActiveSection(id, { persist = true } = {}) {
     el.classList.toggle('active', el.dataset.section === id);
   });
   if (isIn) {
-    ['empty', 'poll', 'controller', 'garmin', 'macbook', 'weather', 'mic', 'time', 'human'].forEach((name) => {
+    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'time', 'human'].forEach((name) => {
       $(`#view-${name}`)?.classList.add('hidden');
     });
     $('#view-insource')?.classList.remove('hidden');
@@ -756,6 +826,8 @@ function setActiveSection(id, { persist = true } = {}) {
   if (type === 'weather') requestAnimationFrame(() => weatherMap?.resize());
   if (type === 'time') dimTimeSignals();
   if (type === 'mic') requestAnimationFrame(drawMicOscCharts);
+  if (type === 'midi') syncMidiView(inst);
+  if (type === 'gamepad') syncGamepadView(inst);
 }
 
 function currentInSourceId() {
@@ -1486,6 +1558,388 @@ function drawWeatherOscCharts() {
     color: '#ffc078',
     digits: 1,
   });
+}
+
+function valuesToOsc(prefix, values) {
+  return Object.entries(values || {})
+    .filter(([key, n]) => !key.startsWith('_') && Number.isFinite(Number(n)))
+    .map(([key, n]) => ({ address: `${prefix}/${key}`, args: [Number(n)] }));
+}
+
+function ensureMidi(inst) {
+  if (!inst) return null;
+  let src = midiById.get(inst.id);
+  if (src) return src;
+  src = new MidiSource({
+    onValues: (values, changed) => onMidiValues(inst.id, values, changed),
+    onStatus: (status) => onMidiStatus(inst.id, status),
+    onLearn: (learned) => onMidiLearn(inst.id, learned),
+  });
+  src.setChannel(inst.settings?.channel || 0);
+  midiById.set(inst.id, src);
+  return src;
+}
+
+function syncMidiView(inst) {
+  const src = inst ? midiById.get(inst.id) : null;
+  const settings = inst?.settings || {};
+  if ($('#midi-channel')) $('#midi-channel').value = String(settings.channel || 0);
+  refreshMidiDevices(settings.inputId || src?.inputId || '');
+  $('#midi-learn-btn')?.classList.toggle('active', !!src?.learning);
+  if ($('#midi-learn-hint')) {
+    $('#midi-learn-hint').textContent = src?.learning
+      ? 'Listening… play a note or move a CC.'
+      : 'Learn: click, then play a note or move a CC. It becomes a Signals row.';
+  }
+  onMidiStatus(inst?.id, {
+    connected: !!src?.connected,
+    connecting: false,
+    name: src?.inputName || '',
+  });
+  if (src?.values) paintMidiLive(src.values);
+}
+
+function setupMidiUi() {
+  $('#midi-connect-btn')?.addEventListener('click', connectMidi);
+  $('#midi-connect-btn-2')?.addEventListener('click', connectMidi);
+  $('#midi-disconnect-btn')?.addEventListener('click', () => disconnectMidi({ forget: true }));
+  $('#midi-device')?.addEventListener('change', () => {
+    const inst = instanceOfType('midi');
+    if (!inst) return;
+    patchInstance(inst.id, { settings: { inputId: $('#midi-device').value } });
+  });
+  $('#midi-channel')?.addEventListener('change', () => {
+    const inst = instanceOfType('midi');
+    if (!inst) return;
+    const channel = Number($('#midi-channel').value) || 0;
+    patchInstance(inst.id, { settings: { channel } });
+    midiById.get(inst.id)?.setChannel(channel);
+  });
+  $('#midi-learn-btn')?.addEventListener('click', () => {
+    const inst = instanceOfType('midi');
+    const src = inst ? ensureMidi(inst) : null;
+    if (!src?.connected) return;
+    src.setLearn(!src.learning);
+    syncMidiView(inst);
+  });
+  $('#midi-clear-learned')?.addEventListener('click', () => {
+    const inst = instanceOfType('midi');
+    if (!inst) return;
+    const next = patchInstance(inst.id, { settings: { learned: [] } });
+    const view = $('#view-midi');
+    if (view) showSourceSignals(next, view);
+  });
+
+  for (const inst of listInstances().filter((s) => s.type === 'midi')) {
+    const src = ensureMidi(inst);
+    if (inst.settings?.autoConnect) {
+      setTimeout(() => src.connect(inst.settings.inputId || '').catch(() => {}), 400);
+    }
+  }
+}
+
+async function refreshMidiDevices(selectedId) {
+  const sel = $('#midi-device');
+  if (!sel || !MidiSource.isSupported()) return;
+  try {
+    const devices = await new MidiSource().listInputs();
+    const want = selectedId || sel.value;
+    sel.innerHTML = [
+      '<option value="">First available</option>',
+      ...devices.map(
+        (d) =>
+          `<option value="${escapeAttr(d.id)}" ${d.id === want ? 'selected' : ''}>${escapeHtml(d.name)}</option>`,
+      ),
+    ].join('');
+  } catch {
+    if (!sel.options.length) sel.innerHTML = '<option value="">Grant MIDI to list devices</option>';
+  }
+}
+
+async function connectMidi() {
+  const inst = instanceOfType('midi');
+  if (!inst) return;
+  const src = ensureMidi(inst);
+  src.setChannel(Number($('#midi-channel')?.value) || inst.settings?.channel || 0);
+  try {
+    const info = await src.connect($('#midi-device')?.value || inst.settings?.inputId || '');
+    patchInstance(inst.id, { settings: { inputId: info.inputId, autoConnect: true } });
+    await refreshMidiDevices(info.inputId);
+  } catch (err) {
+    if (err?.name !== 'SecurityError' && err?.name !== 'NotAllowedError') console.error(err);
+    onMidiStatus(inst.id, { connected: false, error: err.message });
+  }
+}
+
+function disconnectMidi({ forget = false } = {}) {
+  const inst = instanceOfType('midi');
+  if (!inst) return;
+  midiById.get(inst.id)?.disconnect();
+  if (forget) patchInstance(inst.id, { settings: { autoConnect: false } });
+}
+
+function onMidiStatus(id, { connected, connecting, name, error } = {}) {
+  setSourceDot(id, { connected, connecting });
+  const active = instanceOfType('midi');
+  if (active?.id !== id) return;
+  $('#midi-status-dot')?.classList.toggle('connected', !!connected);
+  $('#midi-status-dot')?.classList.toggle('connecting', !!connecting);
+  if ($('#midi-status-text')) {
+    $('#midi-status-text').textContent = connecting
+      ? 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#midi-connect-btn')) $('#midi-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#midi-connect-btn-2')) $('#midi-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#midi-disconnect-btn')) $('#midi-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#midi-overlay-title')) $('#midi-overlay-title').textContent = connecting ? 'Connecting…' : 'No MIDI input';
+  $('#midi-disconnected')?.classList.toggle('hidden', !!connected);
+  $('#midi-live')?.classList.toggle('hidden', !connected);
+  if (name && $('#midi-device-name')) $('#midi-device-name').textContent = name;
+}
+
+function paintMidiLive(values) {
+  if ($('#midi-note-name')) $('#midi-note-name').textContent = noteName(values.note);
+  if ($('#midi-note-unit')) $('#midi-note-unit').textContent = `MIDI ${values.note ?? '—'}`;
+  if ($('#midi-vel-value')) $('#midi-vel-value').textContent = Number(values.vel || 0).toFixed(2);
+  if ($('#midi-gate-value')) $('#midi-gate-value').textContent = values.gate ? '1' : '0';
+  if ($('#midi-bpm-value')) $('#midi-bpm-value').textContent = values.bpm ? String(values.bpm) : '—';
+  if ($('#midi-pitch-value')) $('#midi-pitch-value').textContent = Number(values.pitch || 0).toFixed(2);
+}
+
+function onMidiValues(id, values, changed = {}) {
+  const inst = getInstance(id);
+  if (!inst) return;
+  if (instanceOfType('midi')?.id === id) {
+    paintMidiLive(values);
+    fillSourceSignals(values, inst);
+  }
+  const keys = Object.keys(changed).length ? Object.keys(changed) : Object.keys(values);
+  const messages = keys
+    .filter((key) => key !== 'beat' && !key.startsWith('_') && Number.isFinite(Number(values[key])))
+    .map((key) => ({ address: `/midi/${key}`, args: [Number(values[key])] }));
+  sendInstance(inst, messages);
+  if (changed.beat === 1) {
+    sendTriggerInst(inst, '/midi/beat', 1);
+    setTimeout(() => {
+      const live = midiById.get(id);
+      if (live) live.values.beat = 0;
+      sendTriggerInst(getInstance(id), '/midi/beat', 0);
+    }, 40);
+  }
+}
+
+function onMidiLearn(id, learned) {
+  const inst = getInstance(id);
+  if (!inst || !learned?.key) return;
+  const prev = Array.isArray(inst.settings?.learned) ? inst.settings.learned : [];
+  const nextLearned = prev.some((l) => l.key === learned.key) ? prev : [...prev, learned];
+  const next = patchInstance(id, { settings: { learned: nextLearned } });
+  const mode = defaultSignalMode();
+  if (mode !== 'raw' && !inst.signals?.[learned.key]) {
+    setSignalSpec(id, learned.key, { mode, min: 0, max: 1 });
+  }
+  const view = $('#view-midi');
+  if (view && instanceOfType('midi')?.id === id) showSourceSignals(next, view);
+  $('#midi-learn-btn')?.classList.remove('active');
+  if ($('#midi-learn-hint')) {
+    $('#midi-learn-hint').textContent = `Learned ${learned.key}. Click Learn for another.`;
+  }
+}
+
+function ensureGamepad(inst) {
+  if (!inst) return null;
+  let src = padById.get(inst.id);
+  if (src) return src;
+  src = new GamepadSource({
+    onValues: (values) => onGamepadValues(inst.id, values),
+    onStatus: (status) => onGamepadStatus(inst.id, status),
+  });
+  src.setDeadzone(inst.settings?.deadzone ?? 0.08);
+  padById.set(inst.id, src);
+  bindGamepadSource(inst.id, src);
+  return src;
+}
+
+function syncGamepadView(inst) {
+  const src = inst ? padById.get(inst.id) : null;
+  const settings = inst?.settings || {};
+  if ($('#pad-deadzone')) $('#pad-deadzone').value = String(settings.deadzone ?? 0.08);
+  refreshGamepadDevices(settings.gamepadId || src?.gamepadId || '');
+  onGamepadStatus(inst?.id, {
+    connected: !!src?.connected,
+    connecting: !!src?.waiting,
+    waiting: !!src?.waiting,
+    name: src?.gamepadName || '',
+  });
+  if (src?.values) paintGamepadLive(src.values);
+}
+
+function setupGamepadUi() {
+  const grid = $('#pad-button-grid');
+  if (grid) {
+    grid.innerHTML = PAD_CHIPS.map(
+      ([key, label]) => `<div class="pad-chip" data-pad-btn="${key}">${label}</div>`,
+    ).join('');
+  }
+  const left = $('#pad-stick-left');
+  const right = $('#pad-stick-right');
+  if (left) padStick.left = { canvas: left, ctx: left.getContext('2d') };
+  if (right) padStick.right = { canvas: right, ctx: right.getContext('2d') };
+
+  $('#pad-connect-btn')?.addEventListener('click', connectGamepad);
+  $('#pad-connect-btn-2')?.addEventListener('click', connectGamepad);
+  $('#pad-disconnect-btn')?.addEventListener('click', () => disconnectGamepad({ forget: true }));
+  $('#pad-device')?.addEventListener('change', () => {
+    const inst = instanceOfType('gamepad');
+    if (!inst) return;
+    const raw = $('#pad-device').value;
+    const [index, ...idParts] = raw.split('::');
+    patchInstance(inst.id, { settings: { gamepadIndex: Number(index), gamepadId: idParts.join('::') } });
+  });
+  $('#pad-deadzone')?.addEventListener('input', () => {
+    const inst = instanceOfType('gamepad');
+    if (!inst) return;
+    const deadzone = Number($('#pad-deadzone').value) || 0;
+    patchInstance(inst.id, { settings: { deadzone } });
+    padById.get(inst.id)?.setDeadzone(deadzone);
+  });
+
+  window.addEventListener('gamepadconnected', () => refreshGamepadDevices($('#pad-device')?.value || ''));
+  window.addEventListener('gamepaddisconnected', () => refreshGamepadDevices($('#pad-device')?.value || ''));
+  refreshGamepadDevices('');
+
+  for (const inst of listInstances().filter((s) => s.type === 'gamepad')) {
+    const src = ensureGamepad(inst);
+    if (inst.settings?.autoConnect) {
+      src.connect({ id: inst.settings.gamepadId || '', index: inst.settings.gamepadIndex });
+    }
+  }
+}
+
+function refreshGamepadDevices(selectedId) {
+  const sel = $('#pad-device');
+  if (!sel || !GamepadSource.isSupported()) return;
+  const pads = listGamepads();
+  const want = selectedId || sel.value;
+  sel.innerHTML = [
+    '<option value="">Press a button, then Connect</option>',
+    ...pads.map((p) => {
+      const value = `${p.index}::${p.id}`;
+      const selected = want === p.id || want === value || want === String(p.index);
+      return `<option value="${escapeAttr(value)}" ${selected ? 'selected' : ''}>${escapeHtml(p.name)}</option>`;
+    }),
+  ].join('');
+}
+
+function connectGamepad() {
+  const inst = instanceOfType('gamepad');
+  if (!inst) return;
+  const src = ensureGamepad(inst);
+  src.setDeadzone(Number($('#pad-deadzone')?.value) || inst.settings?.deadzone || 0.08);
+  const raw = $('#pad-device')?.value || '';
+  let id = inst.settings?.gamepadId || '';
+  let index = inst.settings?.gamepadIndex ?? -1;
+  if (raw) {
+    const [idx, ...idParts] = raw.split('::');
+    index = Number(idx);
+    id = idParts.join('::');
+  }
+  const info = src.connect({ id, index });
+  patchInstance(inst.id, {
+    settings: {
+      gamepadId: info?.id || id,
+      gamepadIndex: info?.index ?? index,
+      autoConnect: true,
+    },
+  });
+}
+
+function disconnectGamepad({ forget = false } = {}) {
+  const inst = instanceOfType('gamepad');
+  if (!inst) return;
+  padById.get(inst.id)?.disconnect();
+  padLast.delete(inst.id);
+  if (forget) patchInstance(inst.id, { settings: { autoConnect: false } });
+}
+
+function onGamepadStatus(id, { connected, connecting, waiting, name, buttonCount, axisCount } = {}) {
+  setSourceDot(id, { connected, connecting: connecting || waiting });
+  const inst = getInstance(id);
+  if (inst && (buttonCount || axisCount)) {
+    const patch = {};
+    if (buttonCount && buttonCount !== inst.settings?.buttonCount) patch.buttonCount = buttonCount;
+    if (axisCount && axisCount !== inst.settings?.axisCount) patch.axisCount = axisCount;
+    if (Object.keys(patch).length) {
+      const next = patchInstance(id, { settings: patch });
+      if (instanceOfType('gamepad')?.id === id) {
+        const view = $('#view-gamepad');
+        if (view) showSourceSignals(next, view);
+      }
+    }
+  }
+  const active = instanceOfType('gamepad');
+  if (active?.id !== id) return;
+  $('#pad-status-dot')?.classList.toggle('connected', !!connected);
+  $('#pad-status-dot')?.classList.toggle('connecting', !!(connecting || waiting));
+  if ($('#pad-status-text')) {
+    $('#pad-status-text').textContent = waiting
+      ? 'Press a button…'
+      : connecting
+        ? 'Connecting…'
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#pad-connect-btn')) $('#pad-connect-btn').disabled = !!connected;
+  if ($('#pad-connect-btn-2')) $('#pad-connect-btn-2').disabled = !!connected;
+  if ($('#pad-disconnect-btn')) $('#pad-disconnect-btn').disabled = !connected && !waiting;
+  if ($('#pad-overlay-title')) {
+    $('#pad-overlay-title').textContent = waiting ? 'Press a button on the pad' : 'No gamepad';
+  }
+  $('#pad-disconnected')?.classList.toggle('hidden', !!connected);
+  $('#pad-live')?.classList.toggle('hidden', !connected);
+  if (name && $('#pad-device-name')) $('#pad-device-name').textContent = name;
+}
+
+function paintGamepadLive(values) {
+  $$('#pad-button-grid [data-pad-btn]').forEach((el) => {
+    el.classList.toggle('on', !!values[el.dataset.padBtn]);
+  });
+  const pressed = PAD_CHIPS.find(([key]) => values[key]);
+  if ($('#pad-hero-value')) $('#pad-hero-value').textContent = pressed ? pressed[1] : '—';
+  if ($('#pad-l2-value')) $('#pad-l2-value').textContent = Number(values['trigger/l2'] || 0).toFixed(2);
+  if ($('#pad-r2-value')) $('#pad-r2-value').textContent = Number(values['trigger/r2'] || 0).toFixed(2);
+  if ($('#pad-lx')) $('#pad-lx').textContent = `X ${Number(values['stick/left/x'] || 0.5).toFixed(2)}`;
+  if ($('#pad-ly')) $('#pad-ly').textContent = `Y ${Number(values['stick/left/y'] || 0.5).toFixed(2)}`;
+  if ($('#pad-rx')) $('#pad-rx').textContent = `X ${Number(values['stick/right/x'] || 0.5).toFixed(2)}`;
+  if ($('#pad-ry')) $('#pad-ry').textContent = `Y ${Number(values['stick/right/y'] || 0.5).toFixed(2)}`;
+  if (padStick.left?.ctx) {
+    drawStick(padStick.left.ctx, padStick.left.canvas, values._lx || 0, values._ly || 0);
+  }
+  if (padStick.right?.ctx) {
+    drawStick(padStick.right.ctx, padStick.right.canvas, values._rx || 0, values._ry || 0);
+  }
+}
+
+function onGamepadValues(id, values) {
+  const inst = getInstance(id);
+  if (!inst) return;
+  const prev = padLast.get(id);
+  const messages = valuesToOsc('/pad', values).filter((m) => {
+    const key = m.address.slice('/pad/'.length);
+    return !prev || Number(prev[key]) !== Number(m.args[0]);
+  });
+  padLast.set(id, values);
+  if (instanceOfType('gamepad')?.id === id) {
+    paintGamepadLive(values);
+    if (messages.length) fillSourceSignals(values, inst);
+  }
+  sendInstance(inst, messages);
 }
 
 function persistMicOptions() {

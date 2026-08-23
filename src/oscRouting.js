@@ -4,7 +4,7 @@
  */
 
 export const OSC_SOURCES = [
-  { id: 'controller', label: 'Controller', prefix: '/ds' },
+  { id: 'controller', label: 'DualSense', prefix: '/ds' },
   { id: 'garmin', label: 'Garmin HR', prefix: '/garmin' },
   { id: 'macbook', label: 'MacBook', prefix: '/mac' },
   { id: 'weather', label: 'Weather', prefix: '/weather' },

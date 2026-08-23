@@ -8,7 +8,25 @@ export const SOURCE_CATEGORIES = [
     id: 'hardware',
     label: 'Hardware',
     types: [
-      { id: 'controller', label: 'Controller', icon: 'DS', prefix: '/ds', kind: 'view', hint: 'DualSense via USB or Bluetooth.' },
+      { id: 'controller', label: 'DualSense', icon: 'DS', prefix: '/ds', kind: 'view', hint: 'DualSense via USB or Bluetooth.' },
+      {
+        id: 'midi',
+        label: 'MIDI',
+        icon: 'MD',
+        prefix: '/midi',
+        kind: 'view',
+        hint: 'Notes, CC, velocity, and clock via Web MIDI.',
+        defaults: { inputId: '', channel: 0, learned: [], autoConnect: false },
+      },
+      {
+        id: 'gamepad',
+        label: 'Gamepad',
+        icon: 'GP',
+        prefix: '/pad',
+        kind: 'view',
+        hint: 'Any USB or Bluetooth gamepad (not DualSense).',
+        defaults: { gamepadId: '', gamepadIndex: -1, deadzone: 0.08, autoConnect: false, buttonCount: 17, axisCount: 4 },
+      },
       { id: 'garmin', label: 'Garmin HR', icon: 'HR', prefix: '/garmin', kind: 'view', hint: 'Watch broadcast heart rate over Bluetooth LE.' },
       { id: 'macbook', label: 'MacBook', icon: 'MB', prefix: '/mac', kind: 'view', hint: 'Lid angle via the local gateway.' },
       { id: 'mic', label: 'Microphone', icon: 'MC', prefix: '/mic', kind: 'view', hint: 'Input volume as 0–1.' },
@@ -830,7 +848,11 @@ export function rewriteAddress(inst, address) {
 
 export function instanceLabel(inst) {
   const spec = sourceType(inst?.type);
-  return inst?.name || spec?.label || inst?.type || 'Source';
+  const name = inst?.name || '';
+  if (inst?.type === 'controller' && /^Controller( \d+)?$/.test(name)) {
+    return defaultInstanceName('controller', inst.slot);
+  }
+  return name || spec?.label || inst?.type || 'Source';
 }
 
 export function defaultInstanceName(type, slot) {

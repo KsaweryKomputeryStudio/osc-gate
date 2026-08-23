@@ -8,6 +8,8 @@ import { instanceAddress, instancePrefix, sourceType } from './sourceCatalog.js'
 import { getInstance, patchInstance } from './session.js';
 import { TIME_FIELDS } from './timeSource.js';
 import { WEATHER_FIELDS } from './weatherSource.js';
+import { midiSignalRows } from './midiSource.js';
+import { gamepadSignalRows } from './gamepadSource.js';
 import { scale01 } from './oscInScale.js';
 
 const listeners = new Set();
@@ -238,7 +240,9 @@ export function listKnownSignals(inst) {
       label: f.label,
     }));
   }
-  return (VIEW_SIGNALS[inst.type] || []).map((s) => ({
+  const viewRows =
+    inst.type === 'midi' ? midiSignalRows(inst) : inst.type === 'gamepad' ? gamepadSignalRows(inst) : VIEW_SIGNALS[inst.type] || [];
+  return viewRows.map((s) => ({
     key: s.key,
     address: `${instancePrefix(inst)}/${s.key}`,
     label: s.label,

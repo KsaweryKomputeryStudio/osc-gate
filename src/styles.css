@@ -311,6 +311,7 @@ input[type='color'] {
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.12s ease;
+  will-change: left, top;
 }
 
 .source-tip.visible {
@@ -1976,6 +1977,37 @@ input[type='range'] {
 
 .source-settings-grid .control-group {
   margin-bottom: 0;
+}
+
+#midi-learn-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+.pad-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.pad-chip {
+  min-width: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: #101010;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.pad-chip.on {
+  background: var(--accent);
+  border-color: #ffc078;
+  color: #000;
 }
 
 .source-settings .nav-row {

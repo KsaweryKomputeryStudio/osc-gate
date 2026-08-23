@@ -36,7 +36,7 @@ let pollLocCtx = null;
 const KEY_ICON =
   '<svg class="key-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.2 2.2a3.8 3.8 0 0 0-3.6 4.9L1.5 12.2V14.5H4v-1.5h1.5V11.5H7l1.4-1.4a3.8 3.8 0 1 0 1.8-7.9Zm0 2.3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z"/></svg>';
 
-export function setupSourceStudio({ $, $$, setActiveSection, oscBridge, outCharts }) {
+export function setupSourceStudio({ $, $$, setActiveSection, oscBridge, outCharts, onRemove }) {
   const filter = $('#source-picker-filter');
 
   renderSessionName($);
@@ -111,6 +111,7 @@ export function setupSourceStudio({ $, $$, setActiveSection, oscBridge, outChart
       const id = del.dataset.id;
       stopPoll(id);
       removeInstance(id);
+      onRemove?.(id);
       renderSourceNav($, setActiveSection);
       setActiveSection(loadConfig().ui.activeSection || '');
       return;
@@ -288,6 +289,8 @@ function $$hide($) {
     'empty',
     'poll',
     'controller',
+    'midi',
+    'gamepad',
     'garmin',
     'macbook',
     'weather',
@@ -513,6 +516,8 @@ let tipShowT = 0;
 let tipHideT = 0;
 let tipCurrent = null;
 let tipPending = null;
+let tipX = 0;
+let tipY = 0;
 
 function sourceTipEl() {
   return document.getElementById('source-tip');
@@ -530,17 +535,17 @@ function hideSourceTip() {
   tip.innerHTML = '';
 }
 
-function placeSourceTip(tip, anchor) {
-  const r = anchor.getBoundingClientRect();
+function placeSourceTip(tip) {
   const pad = 8;
-  const sidebar = !!anchor.closest('.sidebar');
+  const gap = 14;
   tip.style.left = '0px';
   tip.style.top = '0px';
   const tw = tip.offsetWidth;
   const th = tip.offsetHeight;
-  let x = sidebar ? r.right + pad : r.left;
-  let y = sidebar ? r.top + (r.height - th) / 2 : r.bottom + pad;
-  if (!sidebar && y + th > window.innerHeight - pad) y = r.top - th - pad;
+  let x = tipX + gap;
+  let y = tipY - th - 6;
+  if (x + tw > window.innerWidth - pad) x = tipX - tw - gap;
+  if (y < pad) y = tipY + gap;
   x = Math.min(Math.max(pad, x), window.innerWidth - tw - pad);
   y = Math.min(Math.max(pad, y), window.innerHeight - th - pad);
   tip.style.left = `${Math.round(x)}px`;
@@ -561,16 +566,25 @@ function showSourceTip(el) {
   const collapsed = inSidebar && document.getElementById('sidebar')?.classList.contains('collapsed');
   tip.innerHTML = collapsed && name ? `<span class="source-tip-name">${esc(name)}</span>${esc(text)}` : esc(text);
   tip.hidden = false;
-  placeSourceTip(tip, el);
+  placeSourceTip(tip);
   tip.classList.add('visible');
 }
 
 function setupSourceTip() {
   if (setupSourceTip.bound) return;
   setupSourceTip.bound = true;
+  document.addEventListener('pointermove', (e) => {
+    tipX = e.clientX;
+    tipY = e.clientY;
+    if (!tipCurrent) return;
+    const tip = sourceTipEl();
+    if (tip && !tip.hidden) placeSourceTip(tip);
+  });
   document.addEventListener('pointerover', (e) => {
     const el = e.target.closest?.('[data-source-tip]');
     if (!el || el === tipCurrent || el === tipPending) return;
+    tipX = e.clientX;
+    tipY = e.clientY;
     tipPending = el;
     clearTimeout(tipHideT);
     clearTimeout(tipShowT);
