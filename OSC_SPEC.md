@@ -8,8 +8,12 @@ Architecture:
 
 ```
 DualSense ──WebHID─────────▶┐
-Garmin HR ──Web Bluetooth──▶┼─ Browser ──WebSocket──▶ OSC Gateway ──UDP──▶ your app
-MacBook  ──WebHID/sensors──▶┘         ◀───────────── OSC Gateway ◀──UDP── your app
+Garmin HR ──Web Bluetooth──▶┤
+MacBook  ──WebHID/sensors──▶┼─ Browser ──WebSocket──▶ OSC Gateway ──UDP──▶ your app
+Weather ──Open-Meteo──────▶┤         ◀───────────── OSC Gateway ◀──UDP── your app
+Microphone ──Web Audio────▶┤
+Time ──local clock────────▶┤
+Human ──YOLO + camera─────▶┘
 ```
 
 | Role | Default | Env |
@@ -18,9 +22,9 @@ MacBook  ──WebHID/sensors──▶┘         ◀─────────
 | OSC receive (world → browser) | `0.0.0.0:9001` (configurable in UI) | `OSC_IN_PORT` (until UI connects) |
 | WebSocket bridge | `ws://127.0.0.1:8081` | `WS_PORT` |
 
-Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
+Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
 
-Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors)
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`
 
 ---
 
@@ -133,6 +137,65 @@ Internal accelerometer / gyro (AppleSPU) are usually **not** exposed to the brow
 
 ---
 
+## Weather — `/weather`
+
+Pick a point on the map (or search). Current conditions come from [Open-Meteo](https://open-meteo.com) (no API key). Enable which addresses to send in the sidebar. Values refresh on each fetch (default 60 s) and are re-sent about once a second while Fetch is running.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/weather/temp` | f | Air temperature °C |
+| `/weather/feels` | f | Apparent temperature °C |
+| `/weather/humidity` | f | Relative humidity **0–100** |
+| `/weather/humidity/norm` | f | Humidity **0–1** |
+| `/weather/wind/speed` | f | Wind speed km/h |
+| `/weather/wind/dir` | f | Wind direction **0–360** |
+| `/weather/wind/dir/norm` | f | Wind direction **0–1** |
+| `/weather/wind/gust` | f | Wind gusts km/h |
+| `/weather/clouds` | f | Cloud cover **0–100** |
+| `/weather/pressure` | f | Mean sea-level pressure hPa |
+| `/weather/precip` | f | Precipitation mm |
+| `/weather/code` | f | WMO weather code |
+| `/weather/is_day` | f | `1` day, `0` night |
+| `/weather/lat` | f | Selected latitude |
+| `/weather/lon` | f | Selected longitude |
+
+---
+
+## Microphone — `/mic`
+
+Browser input via Web Audio. Level is RMS × sensitivity, clamped to **0–1**. Peak is a short hold of the instantaneous peak.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/mic/level` | f | Smoothed volume **0–1** |
+| `/mic/peak` | f | Peak hold **0–1** |
+
+---
+
+## Time — `/time`
+
+Local-timezone calendar progress as **0–1**. `0` is the start of the period, `1` is the next boundary. Week starts Monday by default (Sunday optional). Enable which addresses to send in the sidebar.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/time/day` | f | Midnight → next midnight |
+| `/time/week` | f | Start of week 00:00 → next week |
+| `/time/month` | f | 1st 00:00 → next month |
+| `/time/year` | f | Jan 1 00:00 → next year |
+
+---
+
+## Human count — `/human`
+
+Webcam + **YOLOv8n** (COCO person class) in the browser via ONNX Runtime. First connect downloads the model. Confidence is adjustable.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/human/count` | f | People in frame. Raw integer, or 0–1 when Auto/Manual normalize is on |
+| `/human/present` | f | `1` if raw count ≥ 1, else `0` (not scaled) |
+
+---
+
 ## Inbound (your app → gateway `:9001` → controller)
 
 Send OSC UDP to the gateway **in** port (default **9001**, set in OSC Configuration). Values are floats `0..1` unless noted.
@@ -207,7 +270,7 @@ The bottom **Incoming OSC** dock shows these packets (raw log or compact per-add
 
 ### Example: TouchDesigner / Max / Resolume
 
-- Listen UDP **57121** for `/ds/...` and `/garmin/...`
+- Listen UDP **57121** for `/ds/...`, `/garmin/...`, `/weather/...`, `/mic/...`, `/time/...`, `/human/...`
 - Send UDP **9001** e.g. `/ds/rumble 0.5 0.2`
 
 ### Example: Python (python-osc)

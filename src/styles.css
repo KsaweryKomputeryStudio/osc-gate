@@ -884,7 +884,7 @@ main {
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
   flex: 1;
   min-height: 0;
 }
@@ -1042,6 +1042,10 @@ main {
   display: flex;
 }
 
+.insource-modes button {
+  flex: 1;
+}
+
 .insource-modes button.active {
   background: var(--accent);
   color: #000;
@@ -1084,6 +1088,308 @@ main {
 .insource-ep-chart {
   width: 100%;
   height: 180px;
+}
+
+.weather-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.weather-search-panel {
+  margin-bottom: 14px;
+}
+
+.weather-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0;
+}
+
+.weather-search-results {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.weather-search-results button {
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-top: none;
+}
+
+.weather-search-results button:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.weather-map-panel {
+  padding: 0;
+  margin-bottom: 14px;
+}
+
+.geomap-host,
+.geomap {
+  position: relative;
+  width: 100%;
+  height: 360px;
+  background: #080808;
+  overflow: hidden;
+}
+
+.geomap-view {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.geomap-tiles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.geomap-tiles img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 256px;
+  height: 256px;
+  image-rendering: pixelated;
+}
+
+.geomap-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12px;
+  height: 12px;
+  margin: -12px 0 0 -6px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  pointer-events: none;
+}
+
+.geomap-pin::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 12px;
+  width: 4px;
+  height: 10px;
+  background: var(--accent);
+}
+
+.geomap-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  z-index: 2;
+}
+
+.geomap-tools button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.geomap-tools button:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.geomap-attrib {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 2;
+  font-size: 9px;
+  color: #8f8f8f;
+  pointer-events: none;
+}
+
+.mic-hero {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  gap: 24px;
+  text-align: left;
+}
+
+.mic-meter {
+  position: relative;
+  width: 22px;
+  height: 140px;
+  background: #000;
+  border: 1px solid var(--border-accent);
+}
+
+.mic-meter-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  background: var(--accent);
+}
+
+.mic-meter-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #ffd200;
+  bottom: 0;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: rgb(255, 140, 0);
+}
+
+.time-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.time-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.time-progress-head {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 0;
+  margin-bottom: 12px;
+}
+
+.time-progress-head h2 {
+  margin-bottom: 0;
+}
+
+.time-progress .trigger-bar {
+  height: 14px;
+}
+
+.time-progress .osc-hint {
+  margin-top: 8px;
+}
+
+.human-video-panel {
+  padding: 0;
+}
+
+.human-video-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
+}
+
+.human-video-wrap video,
+.human-video-wrap canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.human-video-wrap video {
+  z-index: 0;
+  background: #000;
+}
+
+.human-video-wrap canvas {
+  z-index: 1;
+  pointer-events: none;
+  background: transparent;
+}
+
+.human-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: var(--accent);
+  color: #000;
+  padding: 6px 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.human-hud span:first-child {
+  font-family: var(--mono);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.source-settings {
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.source-settings-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.source-settings-bar .status-pill {
+  flex: 1;
+  min-width: 160px;
+}
+
+.source-settings-bar .nav-actions {
+  flex: 1;
+  min-width: 220px;
+}
+
+.source-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.source-settings-grid .control-group {
+  margin-bottom: 0;
+}
+
+.source-settings .weather-fields,
+.source-settings .time-fields {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  max-height: none;
+  overflow: visible;
+}
+
+.source-settings .nav-row {
+  max-width: 420px;
 }
 
 .nav-section-head {
@@ -1181,41 +1487,6 @@ main {
   justify-self: end;
 }
 
-.nav-fold {
-  width: 36px;
-  padding: 0;
-  border: none;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
-  background: #101010;
-  color: var(--muted);
-}
-
-.nav-section.active .nav-fold {
-  background: var(--accent);
-  color: #000;
-  border-left-color: rgba(0, 0, 0, 0.25);
-}
-
-.nav-section.folded .nav-fold .nav-fold-caret {
-  display: inline-block;
-  transform: rotate(-90deg);
-}
-
-.nav-section-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-top: none;
-  background: rgba(0, 0, 0, 0.45);
-}
-
-.nav-section.folded .nav-section-body {
-  display: none;
-}
-
 .nav-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1255,8 +1526,6 @@ main {
 }
 
 .sidebar.collapsed .nav-label,
-.sidebar.collapsed .nav-fold,
-.sidebar.collapsed .nav-section-body,
 .sidebar.collapsed .nav-in-del {
   display: none;
 }

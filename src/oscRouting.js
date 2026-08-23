@@ -7,6 +7,10 @@ export const OSC_SOURCES = [
   { id: 'controller', label: 'Controller', prefix: '/ds' },
   { id: 'garmin', label: 'Garmin HR', prefix: '/garmin' },
   { id: 'macbook', label: 'MacBook', prefix: '/mac' },
+  { id: 'weather', label: 'Weather', prefix: '/weather' },
+  { id: 'mic', label: 'Microphone', prefix: '/mic' },
+  { id: 'time', label: 'Time', prefix: '/time' },
+  { id: 'human', label: 'Human count', prefix: '/human' },
 ];
 
 export function newDestId() {

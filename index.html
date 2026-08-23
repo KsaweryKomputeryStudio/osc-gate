@@ -102,21 +102,6 @@
                 <span class="nav-label">Controller</span>
                 <span class="nav-dot" id="controller-nav-dot"></span>
               </button>
-              <button type="button" class="nav-fold" data-fold="controller" aria-label="Collapse controller"><span class="nav-fold-caret">▾</span></button>
-            </div>
-            <div class="nav-section-body" id="section-body-controller">
-              <div class="status-pill compact">
-                <span class="status-dot" id="status-dot"></span>
-                <span id="status-text">Disconnected</span>
-              </div>
-              <div class="nav-actions">
-                <button id="connect-btn" class="primary">Connect</button>
-                <button id="disconnect-btn" disabled>Disconnect</button>
-              </div>
-              <label class="osc-toggle">
-                <input type="checkbox" id="controller-ignore-imu" checked />
-                Ignore IMU (gyro + accelerometer) — recommended
-              </label>
             </div>
           </section>
 
@@ -127,58 +112,6 @@
                 <span class="nav-label">Garmin HR</span>
                 <span class="nav-dot" id="garmin-nav-dot"></span>
               </button>
-              <button type="button" class="nav-fold" data-fold="garmin" aria-label="Collapse Garmin HR"><span class="nav-fold-caret">▾</span></button>
-            </div>
-            <div class="nav-section-body" id="section-body-garmin">
-              <div class="status-pill compact">
-                <span class="status-dot" id="garmin-status-dot"></span>
-                <span id="garmin-status-text">Disconnected</span>
-              </div>
-              <div class="nav-actions">
-                <button id="garmin-connect-btn" class="primary">Connect</button>
-                <button id="garmin-disconnect-btn" disabled>Disconnect</button>
-              </div>
-              <p class="nav-hint">
-                Watch: Sensors → Heart Rate → Broadcast. Disconnect the phone first.
-              </p>
-
-              <div class="control-group">
-                <label for="garmin-trend-window">Trend window (sec)</label>
-                <input type="number" id="garmin-trend-window" class="text-input" min="5" max="600" step="5" value="30" />
-              </div>
-              <div class="control-group">
-                <label for="garmin-trend-range">Trend range ±bpm → 0–1</label>
-                <input type="number" id="garmin-trend-range" class="text-input" min="5" max="80" step="1" value="20" />
-              </div>
-
-              <label class="osc-toggle">
-                <input type="checkbox" id="garmin-trend-smooth" />
-                Smooth trend
-              </label>
-              <div class="control-group hidden" id="garmin-trend-smooth-sec-wrap">
-                <label for="garmin-trend-smooth-sec">Smooth time (sec)</label>
-                <input type="number" id="garmin-trend-smooth-sec" class="text-input" min="0.2" max="30" step="0.5" value="2" />
-              </div>
-
-              <label class="osc-toggle">
-                <input type="checkbox" id="garmin-normalize-hr" />
-                Normalize HR to 0–1
-              </label>
-              <div class="nav-row hidden" id="garmin-hr-range">
-                <div class="control-group">
-                  <label for="garmin-hr-min">HR min</label>
-                  <input type="number" id="garmin-hr-min" class="text-input" min="20" max="180" value="40" />
-                </div>
-                <div class="control-group">
-                  <label for="garmin-hr-max">HR max</label>
-                  <input type="number" id="garmin-hr-max" class="text-input" min="80" max="240" value="200" />
-                </div>
-              </div>
-
-              <label class="osc-toggle">
-                <input type="checkbox" id="garmin-send-beats" checked />
-                Send beat triggers
-              </label>
             </div>
           </section>
 
@@ -189,29 +122,43 @@
                 <span class="nav-label">MacBook</span>
                 <span class="nav-dot" id="macbook-nav-dot"></span>
               </button>
-              <button type="button" class="nav-fold" data-fold="macbook" aria-label="Collapse MacBook"><span class="nav-fold-caret">▾</span></button>
             </div>
-            <div class="nav-section-body" id="section-body-macbook">
-              <div class="status-pill compact">
-                <span class="status-dot" id="macbook-status-dot"></span>
-                <span id="macbook-status-text">Disconnected</span>
-              </div>
-              <div class="nav-actions">
-                <button id="macbook-connect-btn" class="primary">Connect</button>
-                <button id="macbook-disconnect-btn" disabled>Disconnect</button>
-              </div>
-              <p class="nav-hint">
-                Fast path is the local gateway (hidapi), not Chrome WebHID — otherwise the hinge only updates ~1 Hz.
-                Connect with <code>./run</code> running. If native open fails, Chrome will still offer the HID picker.
-              </p>
-              <div class="control-group">
-                <label for="macbook-closed-deg">Lid closed below (°)</label>
-                <input type="number" id="macbook-closed-deg" class="text-input" min="1" max="40" step="1" value="12" />
-              </div>
-              <div class="control-group">
-                <label for="macbook-angle-max">Open = 1.0 at (°)</label>
-                <input type="number" id="macbook-angle-max" class="text-input" min="90" max="360" step="5" value="180" />
-              </div>
+          </section>
+          <section class="nav-section" data-section="weather">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="weather">
+                <span class="nav-icon">WX</span>
+                <span class="nav-label">Weather</span>
+                <span class="nav-dot" id="weather-nav-dot"></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="nav-section" data-section="mic">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="mic">
+                <span class="nav-icon">MC</span>
+                <span class="nav-label">Microphone</span>
+                <span class="nav-dot" id="mic-nav-dot"></span>
+              </button>
+            </div>
+          </section>
+          <section class="nav-section" data-section="time">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="time">
+                <span class="nav-icon">TM</span>
+                <span class="nav-label">Time</span>
+                <span class="nav-dot" id="time-nav-dot"></span>
+              </button>
+            </div>
+          </section>
+          <section class="nav-section" data-section="human">
+            <div class="nav-section-head">
+              <button type="button" class="nav-select" data-section="human">
+                <span class="nav-icon">YO</span>
+                <span class="nav-label">Human count</span>
+                <span class="nav-dot" id="human-nav-dot"></span>
+              </button>
             </div>
           </section>
           <div id="nav-insources" class="nav-insources"></div>
@@ -221,6 +168,22 @@
       <div class="main-column">
         <main>
         <div id="view-controller" class="view">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="connect-btn" class="primary">Connect</button>
+                <button id="disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <label class="osc-toggle">
+              <input type="checkbox" id="controller-ignore-imu" checked />
+              Ignore IMU (gyro + accelerometer) — recommended
+            </label>
+          </div>
           <div id="webhid-warning" class="warning-banner hidden">
             WebHID is not available in this browser. Use Chrome or Edge on desktop (Windows, macOS, Linux).
           </div>
@@ -228,8 +191,8 @@
           <div id="disconnected-view" class="disconnected-overlay">
             <h2>No controller connected</h2>
             <p>
-              Plug in a DualSense via USB or pair over Bluetooth, then connect from the Controller
-              section. OSC destination is global — use the header to start streaming.
+              Plug in a DualSense via USB or pair over Bluetooth, then Connect.
+              OSC destination is global — use the header to start streaming.
             </p>
             <button id="connect-btn-2" class="primary" type="button">Connect Controller</button>
           </div>
@@ -518,6 +481,57 @@
         </div>
 
         <div id="view-garmin" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="garmin-status-dot"></span>
+                <span id="garmin-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="garmin-connect-btn" class="primary">Connect</button>
+                <button id="garmin-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">
+              Watch: Sensors → Heart Rate → Broadcast. Disconnect the phone first.
+            </p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="garmin-trend-window">Trend window (sec)</label>
+                <input type="number" id="garmin-trend-window" class="text-input" min="5" max="600" step="5" value="30" />
+              </div>
+              <div class="control-group">
+                <label for="garmin-trend-range">Trend range ±bpm → 0–1</label>
+                <input type="number" id="garmin-trend-range" class="text-input" min="5" max="80" step="1" value="20" />
+              </div>
+              <div class="control-group hidden" id="garmin-trend-smooth-sec-wrap">
+                <label for="garmin-trend-smooth-sec">Smooth time (sec)</label>
+                <input type="number" id="garmin-trend-smooth-sec" class="text-input" min="0.2" max="30" step="0.5" value="2" />
+              </div>
+            </div>
+            <label class="osc-toggle">
+              <input type="checkbox" id="garmin-trend-smooth" />
+              Smooth trend
+            </label>
+            <label class="osc-toggle">
+              <input type="checkbox" id="garmin-normalize-hr" />
+              Normalize HR to 0–1
+            </label>
+            <div class="nav-row hidden" id="garmin-hr-range">
+              <div class="control-group">
+                <label for="garmin-hr-min">HR min</label>
+                <input type="number" id="garmin-hr-min" class="text-input" min="20" max="180" value="40" />
+              </div>
+              <div class="control-group">
+                <label for="garmin-hr-max">HR max</label>
+                <input type="number" id="garmin-hr-max" class="text-input" min="80" max="240" value="200" />
+              </div>
+            </div>
+            <label class="osc-toggle">
+              <input type="checkbox" id="garmin-send-beats" checked />
+              Send beat triggers
+            </label>
+          </div>
           <div id="webbluetooth-warning" class="warning-banner hidden">
             Web Bluetooth is not available in this browser. Use Chrome or Edge on desktop.
           </div>
@@ -585,6 +599,32 @@
         </div>
 
         <div id="view-macbook" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="macbook-status-dot"></span>
+                <span id="macbook-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="macbook-connect-btn" class="primary">Connect</button>
+                <button id="macbook-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">
+              Fast path is the local gateway (hidapi), not Chrome WebHID — otherwise the hinge only updates ~1 Hz.
+              Connect with <code>./run</code> running. If native open fails, Chrome will still offer the HID picker.
+            </p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="macbook-closed-deg">Lid closed below (°)</label>
+                <input type="number" id="macbook-closed-deg" class="text-input" min="1" max="40" step="1" value="12" />
+              </div>
+              <div class="control-group">
+                <label for="macbook-angle-max">Open = 1.0 at (°)</label>
+                <input type="number" id="macbook-angle-max" class="text-input" min="90" max="360" step="5" value="180" />
+              </div>
+            </div>
+          </div>
           <div id="macbook-hid-warning" class="warning-banner hidden">
             WebHID is not available in this browser. Use Chrome or Edge on a MacBook.
           </div>
@@ -676,6 +716,248 @@
                 <canvas class="hr-chart" id="macbook-chart-open"></canvas>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div id="view-weather" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="weather-status-dot"></span>
+                <span id="weather-status-text">Pick a point</span>
+              </div>
+              <div class="nav-actions">
+                <button id="weather-fetch-btn" class="primary">Fetch</button>
+                <button id="weather-stop-btn" disabled>Stop</button>
+              </div>
+            </div>
+            <p class="nav-hint">Click the map to choose a location. Open-Meteo, no API key.</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="weather-interval">Refresh (sec)</label>
+                <input type="number" id="weather-interval" class="text-input" min="15" max="900" step="15" value="60" />
+              </div>
+            </div>
+            <div class="weather-fields" id="weather-fields"></div>
+          </div>
+          <div class="panel weather-search-panel">
+            <div class="weather-search-row">
+              <input type="search" id="weather-search" class="text-input" placeholder="Search city…" autocomplete="off" />
+              <button type="button" id="weather-search-btn">Search</button>
+            </div>
+            <div id="weather-search-results" class="weather-search-results"></div>
+            <p class="osc-hint" id="weather-place">Click the map or search to set a location.</p>
+          </div>
+          <div class="panel weather-map-panel">
+            <div id="weather-map" class="geomap-host"></div>
+          </div>
+          <div id="weather-live" class="hidden">
+            <div class="hr-hero panel">
+              <div class="hr-value" id="weather-temp-value">—</div>
+              <div class="hr-unit" id="weather-condition">°C</div>
+              <div class="hr-device" id="weather-place-hero">—</div>
+            </div>
+            <div class="stats-row hr-stats weather-stats">
+              <div class="stat">
+                <div class="stat-value" id="weather-hum-value">—</div>
+                <div class="stat-label">Humidity</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="weather-wind-value">—</div>
+                <div class="stat-label">Wind</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="weather-cloud-value">—</div>
+                <div class="stat-label">Clouds</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="weather-precip-value">—</div>
+                <div class="stat-label">Precip</div>
+              </div>
+            </div>
+            <div class="osc-charts">
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/weather/temp</h2>
+                  <span class="osc-chart-value" id="chart-weather-temp">—</span>
+                </div>
+                <canvas class="hr-chart" id="weather-chart-temp"></canvas>
+              </div>
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/weather/wind/speed</h2>
+                  <span class="osc-chart-value" id="chart-weather-wind">—</span>
+                </div>
+                <canvas class="hr-chart" id="weather-chart-wind"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="view-mic" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="mic-status-dot"></span>
+                <span id="mic-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="mic-connect-btn" class="primary">Connect</button>
+                <button id="mic-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="mic-device">Input</label>
+                <select id="mic-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="mic-sensitivity">Sensitivity</label>
+                <input type="range" id="mic-sensitivity" min="1" max="20" step="0.5" value="6" />
+              </div>
+              <div class="control-group">
+                <label for="mic-smoothing">Smoothing</label>
+                <input type="range" id="mic-smoothing" min="0" max="0.95" step="0.05" value="0.65" />
+              </div>
+            </div>
+          </div>
+          <div id="mic-warning" class="warning-banner hidden">
+            Microphone access is not available in this browser. Use Chrome or Edge on desktop, over https or localhost.
+          </div>
+          <div id="mic-disconnected" class="disconnected-overlay">
+            <h2 id="mic-overlay-title">No microphone</h2>
+            <p>Connect to send live input volume as <code>/mic/level</code> and <code>/mic/peak</code> (0–1).</p>
+            <button id="mic-connect-btn-2" class="primary" type="button">Connect microphone</button>
+          </div>
+          <div id="mic-live" class="hidden">
+            <div class="hr-hero panel mic-hero">
+              <div class="mic-meter" aria-hidden="true">
+                <div class="mic-meter-fill" id="mic-meter-fill"></div>
+                <div class="mic-meter-peak" id="mic-meter-peak"></div>
+              </div>
+              <div>
+                <div class="hr-value" id="mic-level-value">0.00</div>
+                <div class="hr-unit">Level 0–1</div>
+                <div class="hr-device" id="mic-device-name">—</div>
+              </div>
+            </div>
+            <div class="stats-row hr-stats">
+              <div class="stat">
+                <div class="stat-value" id="mic-peak-value">0.00</div>
+                <div class="stat-label">Peak</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="mic-osc-level">0.00</div>
+                <div class="stat-label">/mic/level</div>
+              </div>
+            </div>
+            <div class="osc-charts">
+              <div class="panel osc-chart-panel">
+                <div class="osc-chart-head">
+                  <h2>/mic/level</h2>
+                  <span class="osc-chart-value" id="chart-mic-level">—</span>
+                </div>
+                <canvas class="hr-chart" id="mic-chart-level"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="view-time" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="time-status-dot"></span>
+                <span id="time-status-text">Stopped</span>
+              </div>
+              <div class="nav-actions">
+                <button id="time-start-btn" class="primary">Start</button>
+                <button id="time-stop-btn" disabled>Stop</button>
+              </div>
+            </div>
+            <p class="nav-hint">Local calendar progress as 0–1. Week starts Monday by default.</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="time-week-start">Week starts</label>
+                <select id="time-week-start" class="text-input">
+                  <option value="1">Monday</option>
+                  <option value="0">Sunday</option>
+                </select>
+              </div>
+            </div>
+            <div class="time-fields" id="time-fields"></div>
+          </div>
+          <div class="hr-hero panel">
+            <div class="hr-value" id="time-clock">—</div>
+            <div class="hr-unit" id="time-clock-date">Local time</div>
+          </div>
+          <div class="time-progress-list" id="time-progress-list"></div>
+        </div>
+
+        <div id="view-human" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="human-status-dot"></span>
+                <span id="human-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="human-connect-btn" class="primary">Connect</button>
+                <button id="human-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">YOLOv8n in the browser. Model is loaded from this app (~12 MB).</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="human-device">Camera</label>
+                <select id="human-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="human-confidence">Confidence <span id="human-confidence-val">0.35</span></label>
+                <input type="range" id="human-confidence" min="0.15" max="0.8" step="0.05" value="0.35" />
+              </div>
+              <div class="control-group">
+                <label>Count</label>
+                <div class="insource-modes" id="human-count-modes">
+                  <button type="button" data-mode="off" class="active">Raw</button>
+                  <button type="button" data-mode="auto">Auto 0–1</button>
+                  <button type="button" data-mode="manual">Manual 0–1</button>
+                </div>
+              </div>
+            </div>
+            <div class="nav-row insource-range hidden" id="human-count-range">
+              <div class="control-group">
+                <label for="human-count-min" id="human-count-min-label">Min</label>
+                <input id="human-count-min" class="text-input" type="number" min="0" step="1" value="0" />
+              </div>
+              <div class="control-group">
+                <label for="human-count-max" id="human-count-max-label">Max</label>
+                <input id="human-count-max" class="text-input" type="number" min="1" step="1" value="8" />
+              </div>
+              <button type="button" class="insource-reset hidden" id="human-count-reset">Reset range</button>
+            </div>
+          </div>
+          <div id="human-warning" class="warning-banner hidden">
+            Camera access is not available in this browser. Use Chrome or Edge on desktop, over https or localhost.
+          </div>
+          <div id="human-disconnected" class="disconnected-overlay">
+            <h2 id="human-overlay-title">No camera</h2>
+            <p>Connect a webcam to count people with YOLOv8n. Sends <code>/human/count</code>.</p>
+            <button id="human-connect-btn-2" class="primary" type="button">Connect camera</button>
+          </div>
+          <div id="human-live" class="hidden">
+            <div class="panel human-video-panel">
+              <div class="human-video-wrap">
+                <video id="human-video" playsinline muted></video>
+                <canvas id="human-overlay"></canvas>
+                <div class="human-hud">
+                  <span id="human-count-value">0</span>
+                  <span>people</span>
+                </div>
+              </div>
+            </div>
+            <p class="osc-hint" id="human-device-name">—</p>
+            <p class="osc-hint" id="human-osc-hint"><code>/human/count</code> 0</p>
           </div>
         </div>
 

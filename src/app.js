@@ -3,6 +3,11 @@ import { OscBridge, applyOscControl } from './oscBridge.js';
 import { loadConfig, saveConfig } from './config.js';
 import { GarminHrSource, hrToOsc, trendToOsc } from './garminHr.js';
 import { MacbookSensorSource } from './macbookSensors.js';
+import { GeoMap } from './geoMap.js';
+import { WeatherSource, WEATHER_FIELDS, DEFAULT_WEATHER_FIELDS, weatherToOsc, searchPlaces } from './weatherSource.js';
+import { MicSource } from './micSource.js';
+import { TimeSource, TIME_FIELDS, DEFAULT_TIME_FIELDS, timeToOsc } from './timeSource.js';
+import { HumanCountSource, countToOsc } from './humanSource.js';
 import { startPerlinBg } from './perlinBg.js';
 import { AudioClock } from './audioClock.js';
 import {
@@ -52,6 +57,20 @@ let macbookNativeWait = null;
 let macbookUsingNative = false;
 const macbookOsc = { angle: [], open: [] };
 
+let weather = null;
+let weatherMap = null;
+let weatherSendTimer = null;
+let weatherChartTimer = null;
+const weatherOsc = { temp: [], wind: [] };
+
+let mic = null;
+let micChartTimer = null;
+const micOsc = { level: [] };
+
+let timeSource = null;
+let human = null;
+let humanCountAuto = null;
+
 const stickCanvases = {
   left: { canvas: $('#stick-left'), ctx: null },
   right: { canvas: $('#stick-right'), ctx: null },
@@ -82,6 +101,18 @@ function init() {
     if ($('#macbook-connect-btn-2')) $('#macbook-connect-btn-2').disabled = true;
   }
 
+  if (!MicSource.isSupported()) {
+    $('#mic-warning')?.classList.remove('hidden');
+    if ($('#mic-connect-btn')) $('#mic-connect-btn').disabled = true;
+    if ($('#mic-connect-btn-2')) $('#mic-connect-btn-2').disabled = true;
+  }
+
+  if (!HumanCountSource.isSupported()) {
+    $('#human-warning')?.classList.remove('hidden');
+    if ($('#human-connect-btn')) $('#human-connect-btn').disabled = true;
+    if ($('#human-connect-btn-2')) $('#human-connect-btn-2').disabled = true;
+  }
+
   $('#connect-btn').addEventListener('click', connect);
   $('#connect-btn-2')?.addEventListener('click', connect);
   $('#disconnect-btn').addEventListener('click', disconnect);
@@ -92,6 +123,10 @@ function init() {
   setupOscUi();
   setupGarminUi();
   setupMacbookUi();
+  setupWeatherUi();
+  setupMicUi();
+  setupTimeUi();
+  setupHumanUi();
   oscInMonitor = setupOscInMonitor({
     $,
     $$,
@@ -604,11 +639,6 @@ function setupSidebar() {
   setupInSourceNav();
   setActiveSection(saved.ui.activeSection || 'controller', { persist: false });
 
-  for (const [id, open] of Object.entries(saved.ui.sectionsOpen || {})) {
-    const section = $(`.nav-section[data-section="${id}"]`);
-    section?.classList.toggle('folded', !open);
-  }
-
   $('#sidebar-toggle')?.addEventListener('click', () => {
     const collapsed = !sidebar.classList.contains('collapsed');
     sidebar.classList.toggle('collapsed', collapsed);
@@ -618,25 +648,6 @@ function setupSidebar() {
   $$('.nav-select').forEach((btn) => {
     btn.addEventListener('click', () => {
       setActiveSection(btn.dataset.section);
-    });
-  });
-
-  $$('.nav-fold').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.fold;
-      const section = $(`.nav-section[data-section="${id}"]`);
-      const folded = !section.classList.contains('folded');
-      section.classList.toggle('folded', folded);
-      const cfg = loadConfig();
-      saveConfig({
-        ui: {
-          sectionsOpen: {
-            ...cfg.ui.sectionsOpen,
-            [id]: !folded,
-          },
-        },
-      });
     });
   });
 }
@@ -649,10 +660,16 @@ function setActiveSection(id, { persist = true } = {}) {
   $('#view-controller')?.classList.toggle('hidden', id !== 'controller');
   $('#view-garmin')?.classList.toggle('hidden', id !== 'garmin');
   $('#view-macbook')?.classList.toggle('hidden', id !== 'macbook');
+  $('#view-weather')?.classList.toggle('hidden', id !== 'weather');
+  $('#view-mic')?.classList.toggle('hidden', id !== 'mic');
+  $('#view-time')?.classList.toggle('hidden', id !== 'time');
+  $('#view-human')?.classList.toggle('hidden', id !== 'human');
   $('#view-insource')?.classList.toggle('hidden', !isIn);
   if (persist) saveConfig({ ui: { activeSection: id } });
   if (id === 'garmin') requestAnimationFrame(drawGarminOscCharts);
   if (id === 'macbook') requestAnimationFrame(drawMacbookOscCharts);
+  if (id === 'weather') requestAnimationFrame(() => weatherMap?.resize());
+  if (id === 'mic') requestAnimationFrame(drawMicOscCharts);
   if (isIn) {
     renderInSourceView(id);
     startInSourceCharts();
@@ -1137,6 +1154,723 @@ function setupMacbookUi() {
 
   if (saved.autoConnect) {
     setTimeout(() => connectMacbook(), 400);
+  }
+}
+
+function weatherFieldsFromUi() {
+  const fields = { ...DEFAULT_WEATHER_FIELDS, ...(loadConfig().weather.fields || {}) };
+  $$('#weather-fields input[data-weather-field]').forEach((el) => {
+    fields[el.dataset.weatherField] = !!el.checked;
+  });
+  return fields;
+}
+
+function persistWeatherOptions() {
+  const saved = loadConfig().weather || {};
+  const next = {
+    ...saved,
+    intervalSec: Number($('#weather-interval')?.value || 60),
+    fields: weatherFieldsFromUi(),
+  };
+  saveConfig({ weather: next });
+  weather?.setIntervalSec(next.intervalSec);
+  return next;
+}
+
+function setupWeatherUi() {
+  const saved = loadConfig().weather || {};
+  if ($('#weather-interval')) $('#weather-interval').value = String(saved.intervalSec || 60);
+  const fieldsHost = $('#weather-fields');
+  if (fieldsHost) {
+    const fields = { ...DEFAULT_WEATHER_FIELDS, ...(saved.fields || {}) };
+    fieldsHost.innerHTML = WEATHER_FIELDS.map(
+      (f) => `<label class="osc-toggle">
+        <input type="checkbox" data-weather-field="${f.id}" ${fields[f.id] ? 'checked' : ''} />
+        ${f.label}
+      </label>`,
+    ).join('');
+    fieldsHost.addEventListener('change', persistWeatherOptions);
+  }
+  $('#weather-interval')?.addEventListener('change', persistWeatherOptions);
+
+  weather = new WeatherSource({
+    onSample: onWeatherSample,
+    onStatus: onWeatherStatus,
+  });
+
+  const mapEl = $('#weather-map');
+  if (mapEl) {
+    weatherMap = new GeoMap(mapEl, {
+      lat: Number.isFinite(saved.lat) ? saved.lat : 48,
+      lon: Number.isFinite(saved.lon) ? saved.lon : 12,
+      zoom: saved.zoom || 4,
+      onPick: ({ lat, lon }) => pickWeatherPoint(lat, lon, ''),
+    });
+    if (Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
+      weather.setPoint(saved.lat, saved.lon, saved.place || '');
+      weatherMap.setPick(saved.lat, saved.lon, { fly: false });
+      updateWeatherPlaceLabel(saved.place, saved.lat, saved.lon);
+    }
+  }
+
+  $('#weather-fetch-btn')?.addEventListener('click', startWeather);
+  $('#weather-stop-btn')?.addEventListener('click', stopWeather);
+  $('#weather-search-btn')?.addEventListener('click', runWeatherSearch);
+  $('#weather-search')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runWeatherSearch();
+    }
+  });
+  $('#weather-search-results')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lat]');
+    if (!btn) return;
+    pickWeatherPoint(Number(btn.dataset.lat), Number(btn.dataset.lon), btn.dataset.name || '');
+    $('#weather-search-results').innerHTML = '';
+  });
+
+  if (saved.autoFetch && Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
+    setTimeout(() => startWeather(), 400);
+  }
+}
+
+function updateWeatherPlaceLabel(place, lat, lon) {
+  const text =
+    place ||
+    (Number.isFinite(lat) && Number.isFinite(lon) ? `${lat.toFixed(3)}, ${lon.toFixed(3)}` : 'Click the map or search to set a location.');
+  if ($('#weather-place')) $('#weather-place').textContent = text;
+}
+
+async function pickWeatherPoint(lat, lon, place) {
+  weather?.setPoint(lat, lon, place);
+  weatherMap?.setPick(lat, lon, { fly: !!place });
+  const saved = loadConfig().weather || {};
+  saveConfig({
+    weather: {
+      ...saved,
+      lat,
+      lon,
+      place: place || saved.place || '',
+      zoom: weatherMap?.zoom ?? saved.zoom,
+      autoFetch: true,
+    },
+  });
+  if (place) weather.place = place;
+  updateWeatherPlaceLabel(place || weather?.place, lat, lon);
+  await startWeather();
+}
+
+async function runWeatherSearch() {
+  const q = $('#weather-search')?.value || '';
+  const host = $('#weather-search-results');
+  if (!host) return;
+  try {
+    const results = await searchPlaces(q);
+    host.innerHTML = results.length
+      ? results
+          .map(
+            (r) =>
+              `<button type="button" data-lat="${r.lat}" data-lon="${r.lon}" data-name="${escapeAttr(r.name)}">${escapeHtml(r.name)}</button>`,
+          )
+          .join('')
+      : '<p class="osc-hint">No places found</p>';
+  } catch (err) {
+    host.innerHTML = `<p class="osc-hint">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function startWeather() {
+  persistWeatherOptions();
+  const saved = loadConfig().weather;
+  if (Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
+    weather.setPoint(saved.lat, saved.lon, saved.place || '');
+  }
+  saveConfig({ weather: { autoFetch: true } });
+  await weather.start();
+  startWeatherSend();
+  startWeatherCharts();
+}
+
+function stopWeather() {
+  weather?.stop();
+  saveConfig({ weather: { autoFetch: false } });
+  stopWeatherSend();
+}
+
+function startWeatherSend() {
+  stopWeatherSend();
+  sendWeatherOsc();
+  weatherSendTimer = setInterval(sendWeatherOsc, 1000);
+}
+
+function stopWeatherSend() {
+  if (weatherSendTimer) {
+    clearInterval(weatherSendTimer);
+    weatherSendTimer = null;
+  }
+}
+
+function sendWeatherOsc() {
+  if (!weather?.last) return;
+  const fields = weatherFieldsFromUi();
+  const msgs = weatherToOsc(weather.last, fields);
+  if (msgs.length) oscBridge?.sendMessages(msgs, { source: 'weather' });
+}
+
+function onWeatherStatus({ connected, running, fetching, error, place, lat, lon }) {
+  $('#weather-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#weather-nav-dot')?.classList.toggle('connecting', !!fetching && !connected);
+  $('#weather-status-dot')?.classList.toggle('connected', !!connected);
+  $('#weather-status-dot')?.classList.toggle('connecting', !!fetching);
+  if ($('#weather-status-text')) {
+    $('#weather-status-text').textContent = fetching
+      ? 'Fetching…'
+      : error
+        ? error
+        : connected
+          ? place || 'Live'
+          : running
+            ? 'Waiting'
+            : Number.isFinite(lat)
+              ? 'Ready'
+              : 'Pick a point';
+  }
+  if ($('#weather-fetch-btn')) $('#weather-fetch-btn').disabled = !!fetching;
+  if ($('#weather-stop-btn')) $('#weather-stop-btn').disabled = !running;
+  if (place || (Number.isFinite(lat) && Number.isFinite(lon))) {
+    updateWeatherPlaceLabel(place, lat, lon);
+  }
+}
+
+function onWeatherSample(sample) {
+  $('#weather-live')?.classList.remove('hidden');
+  if ($('#weather-temp-value')) {
+    $('#weather-temp-value').textContent = Number.isFinite(sample.temp) ? sample.temp.toFixed(1) : '—';
+  }
+  if ($('#weather-condition')) $('#weather-condition').textContent = sample.condition || '°C';
+  if ($('#weather-place-hero')) {
+    $('#weather-place-hero').textContent =
+      sample.place || `${sample.lat?.toFixed?.(3) ?? '—'}, ${sample.lon?.toFixed?.(3) ?? '—'}`;
+  }
+  if ($('#weather-hum-value')) {
+    $('#weather-hum-value').textContent = Number.isFinite(sample.humidity) ? `${Math.round(sample.humidity)}%` : '—';
+  }
+  if ($('#weather-wind-value')) {
+    $('#weather-wind-value').textContent = Number.isFinite(sample.windSpeed)
+      ? `${sample.windSpeed.toFixed(0)} km/h`
+      : '—';
+  }
+  if ($('#weather-cloud-value')) {
+    $('#weather-cloud-value').textContent = Number.isFinite(sample.clouds) ? `${Math.round(sample.clouds)}%` : '—';
+  }
+  if ($('#weather-precip-value')) {
+    $('#weather-precip-value').textContent = Number.isFinite(sample.precip) ? `${sample.precip.toFixed(1)} mm` : '—';
+  }
+  if ($('#chart-weather-temp')) $('#chart-weather-temp').textContent = Number.isFinite(sample.temp)
+    ? sample.temp.toFixed(1)
+    : '—';
+  if ($('#chart-weather-wind')) {
+    $('#chart-weather-wind').textContent = Number.isFinite(sample.windSpeed) ? sample.windSpeed.toFixed(1) : '—';
+  }
+  const now = performance.now();
+  if (Number.isFinite(sample.temp)) pushSeries(weatherOsc.temp, sample.temp, now);
+  if (Number.isFinite(sample.windSpeed)) pushSeries(weatherOsc.wind, sample.windSpeed, now);
+  sendWeatherOsc();
+}
+
+function startWeatherCharts() {
+  stopWeatherCharts();
+  drawWeatherOscCharts();
+  weatherChartTimer = setInterval(drawWeatherOscCharts, 80);
+}
+
+function stopWeatherCharts() {
+  if (weatherChartTimer) {
+    clearInterval(weatherChartTimer);
+    weatherChartTimer = null;
+  }
+}
+
+function drawWeatherOscCharts() {
+  const now = performance.now();
+  drawOscTimeChart($('#weather-chart-temp'), weatherOsc.temp, {
+    now,
+    color: '#ff8c00',
+    digits: 1,
+  });
+  drawOscTimeChart($('#weather-chart-wind'), weatherOsc.wind, {
+    now,
+    color: '#ffc078',
+    digits: 1,
+  });
+}
+
+function persistMicOptions() {
+  const opts = {
+    sensitivity: Number($('#mic-sensitivity')?.value || 6),
+    smoothing: Number($('#mic-smoothing')?.value || 0.65),
+    deviceId: $('#mic-device')?.value || loadConfig().mic.deviceId || '',
+  };
+  saveConfig({ mic: opts });
+  mic?.setOptions(opts);
+  return opts;
+}
+
+function setupMicUi() {
+  const saved = loadConfig().mic || {};
+  if ($('#mic-sensitivity')) $('#mic-sensitivity').value = String(saved.sensitivity ?? 6);
+  if ($('#mic-smoothing')) $('#mic-smoothing').value = String(saved.smoothing ?? 0.65);
+
+  mic = new MicSource({
+    onSample: onMicSample,
+    onStatus: onMicStatus,
+  });
+  mic.setOptions(saved);
+
+  $('#mic-connect-btn')?.addEventListener('click', connectMic);
+  $('#mic-connect-btn-2')?.addEventListener('click', connectMic);
+  $('#mic-disconnect-btn')?.addEventListener('click', () => disconnectMic({ forget: true }));
+  $('#mic-sensitivity')?.addEventListener('input', persistMicOptions);
+  $('#mic-smoothing')?.addEventListener('input', persistMicOptions);
+  $('#mic-device')?.addEventListener('change', persistMicOptions);
+
+  refreshMicDevices(saved.deviceId);
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+    refreshMicDevices($('#mic-device')?.value || loadConfig().mic.deviceId);
+  });
+
+  if (saved.autoConnect) {
+    setTimeout(() => connectMic(), 400);
+  }
+}
+
+async function refreshMicDevices(selectedId) {
+  const sel = $('#mic-device');
+  if (!sel || !MicSource.isSupported()) return;
+  try {
+    const devices = await (mic || new MicSource()).listDevices();
+    const want = selectedId || sel.value;
+    sel.innerHTML = [
+      '<option value="">Default input</option>',
+      ...devices.map(
+        (d) =>
+          `<option value="${escapeAttr(d.id)}" ${d.id === want ? 'selected' : ''}>${escapeHtml(d.label)}</option>`,
+      ),
+    ].join('');
+  } catch {
+    // ignore until permission
+  }
+}
+
+async function connectMic() {
+  persistMicOptions();
+  try {
+    const info = await mic.connect($('#mic-device')?.value || '');
+    saveConfig({
+      mic: {
+        ...persistMicOptions(),
+        deviceId: info.deviceId,
+        autoConnect: true,
+      },
+    });
+    await refreshMicDevices(info.deviceId);
+  } catch (err) {
+    if (err?.name !== 'NotAllowedError' && err?.name !== 'NotFoundError') console.error(err);
+    onMicStatus({ connected: false, error: err.message });
+  }
+}
+
+async function disconnectMic({ forget = false } = {}) {
+  await mic?.disconnect();
+  if (forget) saveConfig({ mic: { autoConnect: false } });
+}
+
+function onMicStatus({ connected, connecting, name, error }) {
+  $('#mic-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#mic-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  $('#mic-status-dot')?.classList.toggle('connected', !!connected);
+  $('#mic-status-dot')?.classList.toggle('connecting', !!connecting);
+  if ($('#mic-status-text')) {
+    $('#mic-status-text').textContent = connecting
+      ? 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#mic-connect-btn')) $('#mic-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#mic-connect-btn-2')) $('#mic-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#mic-disconnect-btn')) $('#mic-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#mic-overlay-title')) {
+    $('#mic-overlay-title').textContent = connecting ? 'Connecting…' : 'No microphone';
+  }
+  $('#mic-disconnected')?.classList.toggle('hidden', !!connected);
+  $('#mic-live')?.classList.toggle('hidden', !connected);
+  if (name && $('#mic-device-name')) $('#mic-device-name').textContent = name;
+  if (connected) startMicCharts();
+  else if (!connecting) {
+    stopMicCharts();
+    micOsc.level = [];
+  }
+}
+
+function onMicSample({ level, peak, name }) {
+  const lv = Number(level) || 0;
+  const pk = Number(peak) || 0;
+  if ($('#mic-level-value')) $('#mic-level-value').textContent = lv.toFixed(2);
+  if ($('#mic-peak-value')) $('#mic-peak-value').textContent = pk.toFixed(2);
+  if ($('#mic-osc-level')) $('#mic-osc-level').textContent = lv.toFixed(3);
+  if ($('#chart-mic-level')) $('#chart-mic-level').textContent = lv.toFixed(3);
+  if (name && $('#mic-device-name')) $('#mic-device-name').textContent = name;
+  const fill = $('#mic-meter-fill');
+  const peakEl = $('#mic-meter-peak');
+  if (fill) fill.style.height = `${Math.round(lv * 100)}%`;
+  if (peakEl) peakEl.style.bottom = `${Math.round(pk * 100)}%`;
+  pushSeries(micOsc.level, lv);
+  oscBridge?.sendMessages(
+    [
+      { address: '/mic/level', args: [Math.round(lv * 1000) / 1000] },
+      { address: '/mic/peak', args: [Math.round(pk * 1000) / 1000] },
+    ],
+    { source: 'mic' },
+  );
+}
+
+function startMicCharts() {
+  stopMicCharts();
+  drawMicOscCharts();
+  micChartTimer = setInterval(drawMicOscCharts, 80);
+}
+
+function stopMicCharts() {
+  if (micChartTimer) {
+    clearInterval(micChartTimer);
+    micChartTimer = null;
+  }
+}
+
+function drawMicOscCharts() {
+  drawOscTimeChart($('#mic-chart-level'), micOsc.level, {
+    now: performance.now(),
+    color: '#ff8c00',
+    yMin: 0,
+    yMax: 1,
+    digits: 2,
+  });
+}
+
+function timeFieldsFromUi() {
+  const fields = { ...DEFAULT_TIME_FIELDS, ...(loadConfig().time.fields || {}) };
+  $$('#time-fields input[data-time-field]').forEach((el) => {
+    fields[el.dataset.timeField] = !!el.checked;
+  });
+  return fields;
+}
+
+function persistTimeOptions() {
+  const next = {
+    weekStart: Number($('#time-week-start')?.value || 1) === 0 ? 0 : 1,
+    hz: 4,
+    fields: timeFieldsFromUi(),
+    autoStart: !!timeSource?.running,
+  };
+  saveConfig({ time: next });
+  timeSource?.setOptions(next);
+  if (!timeSource?.running) onTimeSample(timeSource.sample());
+  return next;
+}
+
+function setupTimeUi() {
+  const saved = loadConfig().time || {};
+  if ($('#time-week-start')) $('#time-week-start').value = String(saved.weekStart === 0 ? 0 : 1);
+  const host = $('#time-fields');
+  if (host) {
+    const fields = { ...DEFAULT_TIME_FIELDS, ...(saved.fields || {}) };
+    host.innerHTML = TIME_FIELDS.map(
+      (f) => `<label class="osc-toggle">
+        <input type="checkbox" data-time-field="${f.id}" ${fields[f.id] ? 'checked' : ''} />
+        ${f.label} 0–1
+      </label>`,
+    ).join('');
+    host.addEventListener('change', persistTimeOptions);
+  }
+  $('#time-week-start')?.addEventListener('change', persistTimeOptions);
+
+  const list = $('#time-progress-list');
+  if (list) {
+    list.innerHTML = TIME_FIELDS.map(
+      (f) => `<div class="panel time-progress" data-time="${f.id}">
+        <div class="time-progress-head">
+          <h2>${f.address}</h2>
+          <span class="osc-chart-value" data-time-val="${f.id}">—</span>
+        </div>
+        <div class="trigger-bar">
+          <div class="trigger-fill" data-time-bar="${f.id}"></div>
+        </div>
+        <p class="osc-hint" data-time-hint="${f.id}"></p>
+      </div>`,
+    ).join('');
+  }
+
+  timeSource = new TimeSource({
+    onSample: onTimeSample,
+    onStatus: onTimeStatus,
+  });
+  timeSource.setOptions({ weekStart: saved.weekStart === 0 ? 0 : 1, hz: 4 });
+
+  $('#time-start-btn')?.addEventListener('click', startTime);
+  $('#time-stop-btn')?.addEventListener('click', stopTime);
+
+  onTimeSample(timeSource.sample());
+  setInterval(() => {
+    if (!timeSource?.running) onTimeSample(timeSource.sample());
+  }, 250);
+  if (saved.autoStart) setTimeout(() => startTime(), 200);
+}
+
+function startTime() {
+  persistTimeOptions();
+  saveConfig({ time: { autoStart: true } });
+  timeSource.start();
+}
+
+function stopTime() {
+  timeSource?.stop();
+  saveConfig({ time: { autoStart: false } });
+}
+
+function onTimeStatus({ connected }) {
+  $('#time-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#time-status-dot')?.classList.toggle('connected', !!connected);
+  if ($('#time-status-text')) $('#time-status-text').textContent = connected ? 'Running' : 'Stopped';
+  if ($('#time-start-btn')) $('#time-start-btn').disabled = !!connected;
+  if ($('#time-stop-btn')) $('#time-stop-btn').disabled = !connected;
+}
+
+function humanCountModeFromUi() {
+  return $('#human-count-modes .active')?.dataset?.mode || loadConfig().human.countMode || 'off';
+}
+
+function setHumanCountMode(mode) {
+  const next = mode === 'auto' || mode === 'manual' ? mode : 'off';
+  $('#human-count-modes')?.querySelectorAll('button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === next);
+  });
+}
+
+function updateHumanCountRangeUi(observed = humanCountAuto) {
+  const mode = humanCountModeFromUi();
+  const range = $('#human-count-range');
+  const reset = $('#human-count-reset');
+  const minInput = $('#human-count-min');
+  const maxInput = $('#human-count-max');
+  const auto = mode === 'auto';
+  range?.classList.toggle('hidden', mode === 'off');
+  reset?.classList.toggle('hidden', !auto);
+  if ($('#human-count-min-label')) $('#human-count-min-label').textContent = auto ? 'Detected min' : 'Min';
+  if ($('#human-count-max-label')) $('#human-count-max-label').textContent = auto ? 'Detected max' : 'Max';
+  if (minInput) {
+    minInput.readOnly = auto;
+    minInput.classList.toggle('insource-min', auto);
+    if (auto) minInput.value = observed?.min != null ? String(observed.min) : '';
+  }
+  if (maxInput) {
+    maxInput.readOnly = auto;
+    maxInput.classList.toggle('insource-max', auto);
+    if (auto) maxInput.value = observed?.max != null ? String(observed.max) : '';
+  }
+}
+
+function persistHumanOptions() {
+  const confidence = Number($('#human-confidence')?.value || 0.35);
+  if ($('#human-confidence-val')) $('#human-confidence-val').textContent = confidence.toFixed(2);
+  const prev = loadConfig().human || {};
+  const countMode = humanCountModeFromUi();
+  const countMin =
+    countMode === 'manual' ? Number($('#human-count-min')?.value) : Number(prev.countMin);
+  const countMax =
+    countMode === 'manual' ? Number($('#human-count-max')?.value) : Number(prev.countMax);
+  const opts = {
+    confidence,
+    deviceId: $('#human-device')?.value || prev.deviceId || '',
+    countMode,
+    countMin: Number.isFinite(countMin) ? countMin : 0,
+    countMax: Number.isFinite(countMax) ? countMax : 8,
+  };
+  saveConfig({ human: opts });
+  human?.setOptions(opts);
+  updateHumanCountRangeUi();
+  return opts;
+}
+
+function setupHumanUi() {
+  const saved = loadConfig().human || {};
+  if ($('#human-confidence')) $('#human-confidence').value = String(saved.confidence ?? 0.35);
+  if ($('#human-confidence-val')) {
+    $('#human-confidence-val').textContent = Number(saved.confidence ?? 0.35).toFixed(2);
+  }
+  if ($('#human-count-min')) $('#human-count-min').value = String(saved.countMin ?? 0);
+  if ($('#human-count-max')) $('#human-count-max').value = String(saved.countMax ?? 8);
+  setHumanCountMode(saved.countMode || 'off');
+  updateHumanCountRangeUi();
+
+  human = new HumanCountSource({
+    video: $('#human-video'),
+    overlay: $('#human-overlay'),
+    onSample: onHumanSample,
+    onStatus: onHumanStatus,
+  });
+  human.setOptions(saved);
+
+  $('#human-connect-btn')?.addEventListener('click', connectHuman);
+  $('#human-connect-btn-2')?.addEventListener('click', connectHuman);
+  $('#human-disconnect-btn')?.addEventListener('click', () => disconnectHuman({ forget: true }));
+  $('#human-confidence')?.addEventListener('input', persistHumanOptions);
+  $('#human-device')?.addEventListener('change', persistHumanOptions);
+  $('#human-count-modes')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    const prev = loadConfig().human || {};
+    setHumanCountMode(btn.dataset.mode);
+    if (btn.dataset.mode === 'manual') {
+      if ($('#human-count-min')) $('#human-count-min').value = String(prev.countMin ?? 0);
+      if ($('#human-count-max')) $('#human-count-max').value = String(prev.countMax ?? 8);
+    }
+    persistHumanOptions();
+  });
+  $('#human-count-min')?.addEventListener('change', persistHumanOptions);
+  $('#human-count-max')?.addEventListener('change', persistHumanOptions);
+  $('#human-count-reset')?.addEventListener('click', () => {
+    humanCountAuto = null;
+    updateHumanCountRangeUi();
+  });
+
+  refreshHumanDevices(saved.deviceId);
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+    refreshHumanDevices($('#human-device')?.value || loadConfig().human.deviceId);
+  });
+
+  if (saved.autoConnect) setTimeout(() => connectHuman(), 500);
+}
+
+async function refreshHumanDevices(selectedId) {
+  const sel = $('#human-device');
+  if (!sel || !HumanCountSource.isSupported()) return;
+  try {
+    const devices = await (human || new HumanCountSource()).listDevices();
+    const want = selectedId || sel.value;
+    sel.innerHTML = [
+      '<option value="">Default camera</option>',
+      ...devices.map(
+        (d) =>
+          `<option value="${escapeAttr(d.id)}" ${d.id === want ? 'selected' : ''}>${escapeHtml(d.label)}</option>`,
+      ),
+    ].join('');
+  } catch {
+    // ignore until permission
+  }
+}
+
+async function connectHuman() {
+  persistHumanOptions();
+  try {
+    const info = await human.connect($('#human-device')?.value || '');
+    saveConfig({
+      human: {
+        ...persistHumanOptions(),
+        deviceId: info.deviceId,
+        autoConnect: true,
+      },
+    });
+    await refreshHumanDevices(info.deviceId);
+  } catch (err) {
+    if (err?.name !== 'NotAllowedError' && err?.name !== 'NotFoundError') console.error(err);
+    onHumanStatus({ connected: false, error: err.message });
+  }
+}
+
+async function disconnectHuman({ forget = false } = {}) {
+  await human?.disconnect();
+  if (forget) saveConfig({ human: { autoConnect: false } });
+}
+
+function onHumanStatus({ connected, connecting, name, error, message, preview }) {
+  $('#human-nav-dot')?.classList.toggle('connected', !!connected);
+  $('#human-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  $('#human-status-dot')?.classList.toggle('connected', !!connected);
+  $('#human-status-dot')?.classList.toggle('connecting', !!connecting);
+  if ($('#human-status-text')) {
+    $('#human-status-text').textContent = connecting
+      ? message || 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#human-connect-btn')) $('#human-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#human-connect-btn-2')) $('#human-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#human-disconnect-btn')) $('#human-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#human-overlay-title')) {
+    $('#human-overlay-title').textContent = connecting ? message || 'Connecting…' : 'No camera';
+  }
+  const showPreview = !!connected || !!preview || !!connecting;
+  $('#human-disconnected')?.classList.toggle('hidden', showPreview);
+  $('#human-live')?.classList.toggle('hidden', !showPreview);
+  if (name && $('#human-device-name')) $('#human-device-name').textContent = name;
+  if (preview) setActiveSection('human');
+}
+
+function onHumanSample({ count, present, name }) {
+  const raw = Number(count) || 0;
+  const opts = loadConfig().human || {};
+  if (opts.countMode === 'auto') {
+    humanCountAuto = observeRange(humanCountAuto, raw);
+    updateHumanCountRangeUi(humanCountAuto);
+  }
+  const oscCount = countToOsc(raw, opts, humanCountAuto);
+  if ($('#human-count-value')) $('#human-count-value').textContent = String(raw);
+  if (name && $('#human-device-name')) $('#human-device-name').textContent = name;
+  if ($('#human-osc-hint')) {
+    const shown = opts.countMode === 'off' ? String(raw) : oscCount.toFixed(3);
+    $('#human-osc-hint').innerHTML = `<code>/human/count</code> ${shown}`;
+  }
+  oscBridge?.sendMessages(
+    [
+      { address: '/human/count', args: [oscCount] },
+      { address: '/human/present', args: [present ? 1 : 0] },
+    ],
+    { source: 'human' },
+  );
+}
+
+function onTimeSample(sample) {
+  if (!sample) return;
+  const clock = sample.clock;
+  if ($('#time-clock') && clock) {
+    $('#time-clock').textContent = clock.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  if ($('#time-clock-date') && clock) {
+    $('#time-clock-date').textContent = clock.toLocaleDateString(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  }
+  for (const f of TIME_FIELDS) {
+    const v = sample[f.id];
+    const valEl = document.querySelector(`[data-time-val="${f.id}"]`);
+    const bar = document.querySelector(`[data-time-bar="${f.id}"]`);
+    const hint = document.querySelector(`[data-time-hint="${f.id}"]`);
+    if (valEl && Number.isFinite(v)) valEl.textContent = v.toFixed(4);
+    if (bar && Number.isFinite(v)) bar.style.width = `${(v * 100).toFixed(3)}%`;
+    if (hint && Number.isFinite(v)) hint.textContent = `${(v * 100).toFixed(2)}% of ${f.label.toLowerCase()}`;
+  }
+  if (timeSource?.running) {
+    const msgs = timeToOsc(sample, timeFieldsFromUi());
+    if (msgs.length) oscBridge?.sendMessages(msgs, { source: 'time' });
   }
 }
 
@@ -2217,5 +2951,8 @@ window.addEventListener('resize', () => {
   }
   drawGarminOscCharts();
   drawMacbookOscCharts();
+  drawWeatherOscCharts();
+  drawMicOscCharts();
   drawInSourceCharts();
+  weatherMap?.resize();
 });

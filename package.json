@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "node-hid": "^3.4.0",
+    "onnxruntime-web": "^1.21.1",
     "osc": "^2.4.5",
     "ws": "^8.18.0"
   },
