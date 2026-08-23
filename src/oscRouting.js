@@ -64,9 +64,13 @@ export function normalizeInSources(list) {
   });
 }
 
-export function routingSources(inSources = []) {
+export function routingSources(inSources = [], instances = []) {
+  const rows = (instances || []).map((s) => ({
+    id: s.id,
+    label: s.name || s.type,
+  }));
   return [
-    ...OSC_SOURCES,
+    ...rows,
     ...normalizeInSources(inSources).map((s) => ({
       id: s.id,
       label: s.name || s.from,

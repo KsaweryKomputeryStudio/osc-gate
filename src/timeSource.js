@@ -5,6 +5,7 @@
 export const TIME_PREFIX = '/time';
 
 export const TIME_FIELDS = [
+  { id: 'hour', address: '/time/hour', label: 'Hour' },
   { id: 'day', address: '/time/day', label: 'Day' },
   { id: 'week', address: '/time/week', label: 'Week' },
   { id: 'month', address: '/time/month', label: 'Month' },
@@ -12,6 +13,7 @@ export const TIME_FIELDS = [
 ];
 
 export const DEFAULT_TIME_FIELDS = {
+  hour: true,
   day: true,
   week: true,
   month: true,
@@ -37,6 +39,10 @@ function weekdayOffset(d, weekStart) {
 export function timeProgress(now = new Date(), { weekStart = 1 } = {}) {
   const t = now.getTime();
 
+  const hourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
+  const hourEnd = new Date(hourStart);
+  hourEnd.setHours(hourEnd.getHours() + 1);
+
   const dayStart = startOfLocalDay(now);
   const dayEnd = new Date(dayStart);
   dayEnd.setDate(dayEnd.getDate() + 1);
@@ -54,6 +60,7 @@ export function timeProgress(now = new Date(), { weekStart = 1 } = {}) {
   const yearEnd = new Date(now.getFullYear() + 1, 0, 1);
 
   return {
+    hour: clamp01((t - hourStart.getTime()) / (hourEnd - hourStart)),
     day: clamp01((t - dayStart.getTime()) / (dayEnd - dayStart)),
     week: clamp01((t - weekStartDate.getTime()) / (weekEnd - weekStartDate)),
     month: clamp01((t - monthStart.getTime()) / (monthEnd - monthStart)),
@@ -65,7 +72,7 @@ export function timeProgress(now = new Date(), { weekStart = 1 } = {}) {
 export function timeToOsc(values, fields) {
   const msgs = [];
   for (const f of TIME_FIELDS) {
-    if (!fields?.[f.id]) continue;
+    if (fields && fields[f.id] === false) continue;
     const v = values[f.id];
     if (!Number.isFinite(v)) continue;
     msgs.push({ address: f.address, args: [Math.round(v * 1e6) / 1e6] });

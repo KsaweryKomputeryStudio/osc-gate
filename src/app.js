@@ -1,12 +1,18 @@
 import { DualSenseDevice, normalizeStick, normalizeTrigger } from './dualsense.js';
 import { OscBridge, applyOscControl } from './oscBridge.js';
 import { loadConfig, saveConfig } from './config.js';
+import { getInstance, listInstances } from './session.js';
+import { instancePrefix, rewriteAddress } from './sourceCatalog.js';
+import { setupOutCharts } from './outCharts.js';
+import { getSignalSpec, onSignalsChanged, processOutgoing } from './signals.js';
+import { fillSourceSignals, hideSourceSignals, setupSourceSignals } from './signalTable.js';
+import { setupSourceStudio, setTypeDot } from './sourceStudio.js';
 import { GarminHrSource, hrToOsc, trendToOsc } from './garminHr.js';
 import { MacbookSensorSource } from './macbookSensors.js';
-import { GeoMap } from './geoMap.js';
-import { WeatherSource, WEATHER_FIELDS, DEFAULT_WEATHER_FIELDS, weatherToOsc, searchPlaces } from './weatherSource.js';
+import { GeoMap, readBrowserLocation } from './geoMap.js';
+import { WeatherSource, WEATHER_FIELDS, weatherToOsc, searchPlaces } from './weatherSource.js';
 import { MicSource } from './micSource.js';
-import { TimeSource, TIME_FIELDS, DEFAULT_TIME_FIELDS, timeToOsc } from './timeSource.js';
+import { TimeSource, TIME_FIELDS, timeToOsc } from './timeSource.js';
 import { HumanCountSource, countToOsc } from './humanSource.js';
 import { startPerlinBg } from './perlinBg.js';
 import { AudioClock } from './audioClock.js';
@@ -70,6 +76,8 @@ const micOsc = { level: [] };
 let timeSource = null;
 let human = null;
 let humanCountAuto = null;
+let sourceStudio = null;
+let outCharts = null;
 
 const stickCanvases = {
   left: { canvas: $('#stick-left'), ctx: null },
@@ -119,7 +127,6 @@ function init() {
 
   setupOutputControls();
   setupFeatureReports();
-  setupSidebar();
   setupOscUi();
   setupGarminUi();
   setupMacbookUi();
@@ -138,6 +145,20 @@ function init() {
     onRemove: removeIncomingSource,
   });
   ensureGatewayConnection();
+  outCharts = setupOutCharts({ $, loadConfig, saveConfig });
+  setupSourceSignals({ loadConfig, saveConfig });
+  sourceStudio = setupSourceStudio({
+    $,
+    $$,
+    setActiveSection,
+    oscBridge,
+    outCharts,
+  });
+  setupSidebar();
+  onSignalsChanged((id) => {
+    const inst = getInstance(id);
+    if (inst?.type === 'time') dimTimeSignals();
+  });
   ensureAudioClock();
   document.addEventListener('pointerdown', () => ensureAudioClock());
   document.addEventListener('keydown', () => ensureAudioClock());
@@ -332,7 +353,7 @@ function removeIncomingSource(id) {
   oscInMonitor.render?.();
   pushDestinationsToGateway();
   if (currentInSourceId() === id || loadConfig().ui.activeSection === id) {
-    setActiveSection('controller');
+    setActiveSection(listInstances()[0]?.id || '');
   }
 }
 
@@ -342,7 +363,7 @@ function renderRoutingMatrix() {
   const osc = loadConfig().osc;
   const dests = osc.destinations || [];
   const routing = osc.routing || {};
-  const sources = routingSources(osc.inSources);
+  const sources = routingSources(osc.inSources, loadConfig().sources);
   table.innerHTML = `<thead><tr><th></th>${dests
     .map((d) => `<th title="${escapeAttr(`${d.host}:${d.port}`)}">${escapeAttr(d.name || destLabel(d))}</th>`)
     .join('')}</tr></thead><tbody>${sources
@@ -371,12 +392,12 @@ function applyOscDestination() {
   const inPort = Number($('#osc-modal-in-port')?.value);
   for (const d of dests) {
     if (!isValidHost(d.host) || !isValidPort(d.port)) {
-      if (err) {
+    if (err) {
         err.textContent = 'Each destination needs a valid IP/hostname and port (1–65535).';
-        err.classList.remove('hidden');
-      }
-      return false;
+      err.classList.remove('hidden');
     }
+    return false;
+  }
   }
   if (!isValidPort(inPort)) {
     if (err) {
@@ -391,12 +412,36 @@ function applyOscDestination() {
   return true;
 }
 
+function showConfigTab(id) {
+  const tab = id === 'signals' ? 'signals' : 'osc';
+  $$('[data-config-tab]').forEach((btn) => btn.classList.toggle('active', btn.dataset.configTab === tab));
+  $('#config-tab-osc')?.classList.toggle('hidden', tab !== 'osc');
+  $('#config-tab-signals')?.classList.toggle('hidden', tab !== 'signals');
+  saveConfig({ ui: { configTab: tab } });
+}
+
+function syncSignalDefaultButtons(mode) {
+  const next = mode === 'off' || mode === 'auto' ? mode : 'raw';
+  $$('#config-signal-default [data-default-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.defaultMode === next);
+  });
+}
+
+function persistSignalDefaults() {
+  const mode = document.querySelector('#config-signal-default [data-default-mode].active')?.dataset.defaultMode;
+  if (mode === 'off' || mode === 'raw' || mode === 'auto') {
+    saveConfig({ signals: { defaultMode: mode } });
+  }
+}
+
 function openOscConfigModal() {
   const osc = loadConfig().osc;
   if ($('#osc-modal-in-port')) $('#osc-modal-in-port').value = String(osc.inPort || 9001);
   if ($('#osc-modal-hz')) $('#osc-modal-hz').value = String(osc.hz || 60);
   if ($('#osc-ws-url')) $('#osc-ws-url').value = osc.wsUrl;
   renderDestinationEditor();
+  syncSignalDefaultButtons(loadConfig().signals?.defaultMode);
+  showConfigTab(loadConfig().ui.configTab || 'osc');
   $('#osc-modal-error')?.classList.add('hidden');
   $('#osc-config-modal')?.classList.remove('hidden');
 }
@@ -467,11 +512,16 @@ function ensureGatewayConnection() {
   const url = ($('#osc-ws-url')?.value || saved.osc.wsUrl || 'ws://127.0.0.1:8081').trim();
   if (!oscBridge) {
     oscBridge = createOscBridge(url);
+    oscBridge.filterOutgoing = (sourceId, messages) => {
+      const inst = getInstance(sourceId);
+      if (!inst) return messages;
+      return processOutgoing(inst, messages).sent;
+    };
     const osc = saved.osc;
     oscBridge.setHz(Number($('#osc-modal-hz')?.value || 60));
-    oscBridge.setIgnoreImu(getOscIgnoreImu());
+  oscBridge.setIgnoreImu(getOscIgnoreImu());
     oscBridge.setDestinations(osc.destinations, osc.routing, osc.inPort, osc.inSources);
-    oscBridge.connect();
+  oscBridge.connect();
   }
   if (oscWantStream) oscBridge.setEnabled(true);
   return oscBridge;
@@ -578,7 +628,16 @@ function setupOscUi() {
   $('#osc-dest-add')?.addEventListener('click', () => addDestination());
 
   $('#osc-modal-apply')?.addEventListener('click', () => {
+    persistSignalDefaults();
     if (applyOscDestination()) closeOscConfigModal();
+  });
+
+  $$('[data-config-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => showConfigTab(btn.dataset.configTab));
+  });
+  $('#config-signal-default')?.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-default-mode]')?.dataset.defaultMode;
+    if (mode) syncSignalDefaultButtons(mode);
   });
 
   $('#osc-connect-btn')?.addEventListener('click', () => startOscStreaming());
@@ -637,45 +696,66 @@ function setupSidebar() {
   if (saved.ui.sidebarCollapsed) sidebar?.classList.add('collapsed');
 
   setupInSourceNav();
-  setActiveSection(saved.ui.activeSection || 'controller', { persist: false });
+  setActiveSection(saved.ui.activeSection || '', { persist: false });
 
   $('#sidebar-toggle')?.addEventListener('click', () => {
     const collapsed = !sidebar.classList.contains('collapsed');
     sidebar.classList.toggle('collapsed', collapsed);
     saveConfig({ ui: { sidebarCollapsed: collapsed } });
   });
+}
 
-  $$('.nav-select').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      setActiveSection(btn.dataset.section);
-    });
-  });
+function instanceOfType(type) {
+  const active = sourceStudio?.activeInstance?.();
+  if (active?.type === type) return active;
+  return listInstances().find((s) => s.type === type) || null;
+}
+
+function sendType(type, messages) {
+  const inst = instanceOfType(type);
+  if (!inst || !messages?.length) return;
+  sourceStudio?.sendFrom(inst, messages);
+}
+
+function sendTriggerType(type, address, value) {
+  const inst = instanceOfType(type);
+  if (!inst) return;
+  const addr = rewriteAddress(inst, address);
+  outCharts?.push(inst.id, [{ address: addr, args: [Number(value)] }]);
+  oscBridge?.sendTrigger(addr, value, { source: inst.id });
 }
 
 function setActiveSection(id, { persist = true } = {}) {
   const isIn = String(id || '').startsWith('in:');
+  if (persist) saveConfig({ ui: { activeSection: id } });
   $$('.nav-section').forEach((el) => {
     el.classList.toggle('active', el.dataset.section === id);
   });
-  $('#view-controller')?.classList.toggle('hidden', id !== 'controller');
-  $('#view-garmin')?.classList.toggle('hidden', id !== 'garmin');
-  $('#view-macbook')?.classList.toggle('hidden', id !== 'macbook');
-  $('#view-weather')?.classList.toggle('hidden', id !== 'weather');
-  $('#view-mic')?.classList.toggle('hidden', id !== 'mic');
-  $('#view-time')?.classList.toggle('hidden', id !== 'time');
-  $('#view-human')?.classList.toggle('hidden', id !== 'human');
-  $('#view-insource')?.classList.toggle('hidden', !isIn);
-  if (persist) saveConfig({ ui: { activeSection: id } });
-  if (id === 'garmin') requestAnimationFrame(drawGarminOscCharts);
-  if (id === 'macbook') requestAnimationFrame(drawMacbookOscCharts);
-  if (id === 'weather') requestAnimationFrame(() => weatherMap?.resize());
-  if (id === 'mic') requestAnimationFrame(drawMicOscCharts);
   if (isIn) {
+    ['empty', 'poll', 'controller', 'garmin', 'macbook', 'weather', 'mic', 'time', 'human'].forEach((name) => {
+      $(`#view-${name}`)?.classList.add('hidden');
+    });
+    $('#view-insource')?.classList.remove('hidden');
     renderInSourceView(id);
     startInSourceCharts();
-  } else {
-    stopInSourceCharts();
+    hideSourceSignals();
+    outCharts?.setSource(id, id);
+    return;
   }
+  stopInSourceCharts();
+  $('#view-insource')?.classList.add('hidden');
+  sourceStudio?.activateInstance(id);
+  const inst = listInstances().find((s) => s.id === id) || null;
+  const type = inst?.type || '';
+  if (type === 'controller' && inst && oscBridge) {
+    oscBridge.controlSource = inst.id;
+    oscBridge.controlPrefix = instancePrefix(inst);
+  }
+  if (type === 'garmin') requestAnimationFrame(drawGarminOscCharts);
+  if (type === 'macbook') requestAnimationFrame(drawMacbookOscCharts);
+  if (type === 'weather') requestAnimationFrame(() => weatherMap?.resize());
+  if (type === 'time') dimTimeSignals();
+  if (type === 'mic') requestAnimationFrame(drawMicOscCharts);
 }
 
 function currentInSourceId() {
@@ -830,12 +910,18 @@ function renderInSourceNav() {
   const host = $('#nav-insources');
   if (!host) return;
   const sources = loadConfig().osc.inSources || [];
+  const sep = $('#nav-in-sep');
+  if (sep) {
+    const show = sources.length > 0;
+    sep.hidden = !show;
+    sep.classList.toggle('hidden', !show);
+  }
   const active = loadConfig().ui.activeSection;
   host.innerHTML = sources
     .map(
       (s) => `<section class="nav-section ${s.id === active ? 'active' : ''}" data-section="${escapeAttr(s.id)}">
         <div class="nav-section-head">
-          <button type="button" class="nav-select" data-section="${escapeAttr(s.id)}" title="${escapeAttr(s.from)}">
+          <button type="button" class="nav-select" data-section="${escapeAttr(s.id)}" data-source-tip="${escapeAttr(`Incoming OSC from ${s.from}`)}" data-source-tip-name="${escapeAttr(s.name || s.from)}">
             <span class="nav-icon">IN</span>
             <span class="nav-label">${escapeHtml(s.name || s.from)}</span>
             <span class="nav-dot" data-in-dot="${escapeAttr(s.id)}"></span>
@@ -948,7 +1034,7 @@ function patchInSourceRow(address, live, sourceId) {
 function renderInSourceView(id) {
   const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
   if (!src) {
-    setActiveSection('controller');
+    setActiveSection(listInstances()[0]?.id || '');
     return;
   }
   const nameEl = $('#insource-name');
@@ -1111,7 +1197,7 @@ function setupGarminUi() {
   $('#garmin-normalize-hr')?.addEventListener('change', persistGarminOptions);
   $('#garmin-send-beats')?.addEventListener('change', persistGarminOptions);
 
-  if (saved.deviceId || saved.autoConnect) {
+  if (listInstances().some((s) => s.type === 'garmin') && (saved.deviceId || saved.autoConnect)) {
     setTimeout(() => {
       garmin.reconnect(saved.deviceId).catch(() => {});
     }, 250);
@@ -1152,17 +1238,9 @@ function setupMacbookUi() {
   $('#macbook-closed-deg')?.addEventListener('change', persistMacbookOptions);
   $('#macbook-angle-max')?.addEventListener('change', persistMacbookOptions);
 
-  if (saved.autoConnect) {
+  if (saved.autoConnect && listInstances().some((s) => s.type === 'macbook')) {
     setTimeout(() => connectMacbook(), 400);
   }
-}
-
-function weatherFieldsFromUi() {
-  const fields = { ...DEFAULT_WEATHER_FIELDS, ...(loadConfig().weather.fields || {}) };
-  $$('#weather-fields input[data-weather-field]').forEach((el) => {
-    fields[el.dataset.weatherField] = !!el.checked;
-  });
-  return fields;
 }
 
 function persistWeatherOptions() {
@@ -1170,7 +1248,6 @@ function persistWeatherOptions() {
   const next = {
     ...saved,
     intervalSec: Number($('#weather-interval')?.value || 60),
-    fields: weatherFieldsFromUi(),
   };
   saveConfig({ weather: next });
   weather?.setIntervalSec(next.intervalSec);
@@ -1180,17 +1257,6 @@ function persistWeatherOptions() {
 function setupWeatherUi() {
   const saved = loadConfig().weather || {};
   if ($('#weather-interval')) $('#weather-interval').value = String(saved.intervalSec || 60);
-  const fieldsHost = $('#weather-fields');
-  if (fieldsHost) {
-    const fields = { ...DEFAULT_WEATHER_FIELDS, ...(saved.fields || {}) };
-    fieldsHost.innerHTML = WEATHER_FIELDS.map(
-      (f) => `<label class="osc-toggle">
-        <input type="checkbox" data-weather-field="${f.id}" ${fields[f.id] ? 'checked' : ''} />
-        ${f.label}
-      </label>`,
-    ).join('');
-    fieldsHost.addEventListener('change', persistWeatherOptions);
-  }
   $('#weather-interval')?.addEventListener('change', persistWeatherOptions);
 
   weather = new WeatherSource({
@@ -1216,6 +1282,7 @@ function setupWeatherUi() {
   $('#weather-fetch-btn')?.addEventListener('click', startWeather);
   $('#weather-stop-btn')?.addEventListener('click', stopWeather);
   $('#weather-search-btn')?.addEventListener('click', runWeatherSearch);
+  $('#weather-locate-btn')?.addEventListener('click', locateWeatherBrowser);
   $('#weather-search')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -1229,9 +1296,18 @@ function setupWeatherUi() {
     $('#weather-search-results').innerHTML = '';
   });
 
-  if (saved.autoFetch && Number.isFinite(saved.lat) && Number.isFinite(saved.lon)) {
+  if (saved.autoFetch && Number.isFinite(saved.lat) && Number.isFinite(saved.lon) && listInstances().some((s) => s.type === 'weather')) {
     setTimeout(() => startWeather(), 400);
   }
+}
+
+function locateWeatherBrowser() {
+  if ($('#weather-place')) $('#weather-place').textContent = 'Reading browser location…';
+  readBrowserLocation()
+    .then(({ lat, lon }) => pickWeatherPoint(lat, lon, '', { fly: true }))
+    .catch((err) => {
+      if ($('#weather-place')) $('#weather-place').textContent = err.message || 'Location unavailable';
+    });
 }
 
 function updateWeatherPlaceLabel(place, lat, lon) {
@@ -1241,9 +1317,9 @@ function updateWeatherPlaceLabel(place, lat, lon) {
   if ($('#weather-place')) $('#weather-place').textContent = text;
 }
 
-async function pickWeatherPoint(lat, lon, place) {
+async function pickWeatherPoint(lat, lon, place, { fly } = {}) {
   weather?.setPoint(lat, lon, place);
-  weatherMap?.setPick(lat, lon, { fly: !!place });
+  weatherMap?.setPick(lat, lon, { fly: fly ?? !!place });
   const saved = loadConfig().weather || {};
   saveConfig({
     weather: {
@@ -1312,14 +1388,13 @@ function stopWeatherSend() {
 
 function sendWeatherOsc() {
   if (!weather?.last) return;
-  const fields = weatherFieldsFromUi();
-  const msgs = weatherToOsc(weather.last, fields);
-  if (msgs.length) oscBridge?.sendMessages(msgs, { source: 'weather' });
+  const msgs = weatherToOsc(weather.last);
+  if (msgs.length) sendType('weather', msgs);
 }
 
+
 function onWeatherStatus({ connected, running, fetching, error, place, lat, lon }) {
-  $('#weather-nav-dot')?.classList.toggle('connected', !!connected);
-  $('#weather-nav-dot')?.classList.toggle('connecting', !!fetching && !connected);
+  setTypeDot('weather', { connected, connecting: fetching });
   $('#weather-status-dot')?.classList.toggle('connected', !!connected);
   $('#weather-status-dot')?.classList.toggle('connecting', !!fetching);
   if ($('#weather-status-text')) {
@@ -1375,6 +1450,14 @@ function onWeatherSample(sample) {
   const now = performance.now();
   if (Number.isFinite(sample.temp)) pushSeries(weatherOsc.temp, sample.temp, now);
   if (Number.isFinite(sample.windSpeed)) pushSeries(weatherOsc.wind, sample.windSpeed, now);
+  const weatherInst = instanceOfType('weather');
+  if (weatherInst) {
+    const vals = {};
+    for (const f of WEATHER_FIELDS) {
+      vals[f.address.replace(/^\/weather\//, '')] = sample[f.id];
+    }
+    fillSourceSignals(vals, weatherInst);
+  }
   sendWeatherOsc();
 }
 
@@ -1439,7 +1522,7 @@ function setupMicUi() {
     refreshMicDevices($('#mic-device')?.value || loadConfig().mic.deviceId);
   });
 
-  if (saved.autoConnect) {
+  if (saved.autoConnect && listInstances().some((s) => s.type === 'mic')) {
     setTimeout(() => connectMic(), 400);
   }
 }
@@ -1486,8 +1569,7 @@ async function disconnectMic({ forget = false } = {}) {
 }
 
 function onMicStatus({ connected, connecting, name, error }) {
-  $('#mic-nav-dot')?.classList.toggle('connected', !!connected);
-  $('#mic-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  setTypeDot('mic', { connected, connecting });
   $('#mic-status-dot')?.classList.toggle('connected', !!connected);
   $('#mic-status-dot')?.classList.toggle('connecting', !!connecting);
   if ($('#mic-status-text')) {
@@ -1528,13 +1610,10 @@ function onMicSample({ level, peak, name }) {
   if (fill) fill.style.height = `${Math.round(lv * 100)}%`;
   if (peakEl) peakEl.style.bottom = `${Math.round(pk * 100)}%`;
   pushSeries(micOsc.level, lv);
-  oscBridge?.sendMessages(
-    [
-      { address: '/mic/level', args: [Math.round(lv * 1000) / 1000] },
-      { address: '/mic/peak', args: [Math.round(pk * 1000) / 1000] },
-    ],
-    { source: 'mic' },
-  );
+  sendType('mic', [
+    { address: '/mic/level', args: [Math.round(lv * 1000) / 1000] },
+    { address: '/mic/peak', args: [Math.round(pk * 1000) / 1000] },
+  ]);
 }
 
 function startMicCharts() {
@@ -1560,19 +1639,10 @@ function drawMicOscCharts() {
   });
 }
 
-function timeFieldsFromUi() {
-  const fields = { ...DEFAULT_TIME_FIELDS, ...(loadConfig().time.fields || {}) };
-  $$('#time-fields input[data-time-field]').forEach((el) => {
-    fields[el.dataset.timeField] = !!el.checked;
-  });
-  return fields;
-}
-
 function persistTimeOptions() {
   const next = {
     weekStart: Number($('#time-week-start')?.value || 1) === 0 ? 0 : 1,
     hz: 4,
-    fields: timeFieldsFromUi(),
     autoStart: !!timeSource?.running,
   };
   saveConfig({ time: next });
@@ -1581,20 +1651,18 @@ function persistTimeOptions() {
   return next;
 }
 
+function dimTimeSignals() {
+  const inst = instanceOfType('time');
+  TIME_FIELDS.forEach((f) => {
+    const panel = document.querySelector(`[data-time="${f.id}"]`);
+    panel?.classList.toggle('off', inst ? getSignalSpec(inst, f.id).mode === 'off' : false);
+  });
+}
+
 function setupTimeUi() {
   const saved = loadConfig().time || {};
   if ($('#time-week-start')) $('#time-week-start').value = String(saved.weekStart === 0 ? 0 : 1);
-  const host = $('#time-fields');
-  if (host) {
-    const fields = { ...DEFAULT_TIME_FIELDS, ...(saved.fields || {}) };
-    host.innerHTML = TIME_FIELDS.map(
-      (f) => `<label class="osc-toggle">
-        <input type="checkbox" data-time-field="${f.id}" ${fields[f.id] ? 'checked' : ''} />
-        ${f.label} 0–1
-      </label>`,
-    ).join('');
-    host.addEventListener('change', persistTimeOptions);
-  }
+  dimTimeSignals();
   $('#time-week-start')?.addEventListener('change', persistTimeOptions);
 
   const list = $('#time-progress-list');
@@ -1626,7 +1694,7 @@ function setupTimeUi() {
   setInterval(() => {
     if (!timeSource?.running) onTimeSample(timeSource.sample());
   }, 250);
-  if (saved.autoStart) setTimeout(() => startTime(), 200);
+  if (saved.autoStart && listInstances().some((s) => s.type === 'time')) setTimeout(() => startTime(), 200);
 }
 
 function startTime() {
@@ -1641,7 +1709,7 @@ function stopTime() {
 }
 
 function onTimeStatus({ connected }) {
-  $('#time-nav-dot')?.classList.toggle('connected', !!connected);
+  setTypeDot('time', { connected });
   $('#time-status-dot')?.classList.toggle('connected', !!connected);
   if ($('#time-status-text')) $('#time-status-text').textContent = connected ? 'Running' : 'Stopped';
   if ($('#time-start-btn')) $('#time-start-btn').disabled = !!connected;
@@ -1751,7 +1819,7 @@ function setupHumanUi() {
     refreshHumanDevices($('#human-device')?.value || loadConfig().human.deviceId);
   });
 
-  if (saved.autoConnect) setTimeout(() => connectHuman(), 500);
+  if (saved.autoConnect && listInstances().some((s) => s.type === 'human')) setTimeout(() => connectHuman(), 500);
 }
 
 async function refreshHumanDevices(selectedId) {
@@ -1796,8 +1864,7 @@ async function disconnectHuman({ forget = false } = {}) {
 }
 
 function onHumanStatus({ connected, connecting, name, error, message, preview }) {
-  $('#human-nav-dot')?.classList.toggle('connected', !!connected);
-  $('#human-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  setTypeDot('human', { connected, connecting });
   $('#human-status-dot')?.classList.toggle('connected', !!connected);
   $('#human-status-dot')?.classList.toggle('connecting', !!connecting);
   if ($('#human-status-text')) {
@@ -1819,7 +1886,10 @@ function onHumanStatus({ connected, connecting, name, error, message, preview })
   $('#human-disconnected')?.classList.toggle('hidden', showPreview);
   $('#human-live')?.classList.toggle('hidden', !showPreview);
   if (name && $('#human-device-name')) $('#human-device-name').textContent = name;
-  if (preview) setActiveSection('human');
+  if (preview) {
+    const inst = instanceOfType('human');
+    if (inst) setActiveSection(inst.id);
+  }
 }
 
 function onHumanSample({ count, present, name }) {
@@ -1836,13 +1906,10 @@ function onHumanSample({ count, present, name }) {
     const shown = opts.countMode === 'off' ? String(raw) : oscCount.toFixed(3);
     $('#human-osc-hint').innerHTML = `<code>/human/count</code> ${shown}`;
   }
-  oscBridge?.sendMessages(
-    [
-      { address: '/human/count', args: [oscCount] },
-      { address: '/human/present', args: [present ? 1 : 0] },
-    ],
-    { source: 'human' },
-  );
+  sendType('human', [
+    { address: '/human/count', args: [oscCount] },
+    { address: '/human/present', args: [present ? 1 : 0] },
+  ]);
 }
 
 function onTimeSample(sample) {
@@ -1868,9 +1935,11 @@ function onTimeSample(sample) {
     if (bar && Number.isFinite(v)) bar.style.width = `${(v * 100).toFixed(3)}%`;
     if (hint && Number.isFinite(v)) hint.textContent = `${(v * 100).toFixed(2)}% of ${f.label.toLowerCase()}`;
   }
+  const timeInst = instanceOfType('time');
+  if (timeInst) fillSourceSignals(sample, timeInst);
   if (timeSource?.running) {
-    const msgs = timeToOsc(sample, timeFieldsFromUi());
-    if (msgs.length) oscBridge?.sendMessages(msgs, { source: 'time' });
+    const msgs = timeToOsc(sample);
+    if (msgs.length) sendType('time', msgs);
   }
 }
 
@@ -1959,8 +2028,7 @@ function onMacbookStatus({ connected, connecting, sources, error }) {
   if ($('#macbook-status-text')) $('#macbook-status-text').textContent = text;
   $('#macbook-status-dot')?.classList.toggle('connected', !!connected);
   $('#macbook-status-dot')?.classList.toggle('connecting', !!connecting && !connected);
-  $('#macbook-nav-dot')?.classList.toggle('connected', !!connected);
-  $('#macbook-nav-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  setTypeDot('macbook', { connected, connecting });
 
   if ($('#macbook-connect-btn')) $('#macbook-connect-btn').disabled = !!connected || !!connecting;
   if ($('#macbook-disconnect-btn')) $('#macbook-disconnect-btn').disabled = !macbook?._want && !connected;
@@ -2041,7 +2109,7 @@ function onMacbookSample(sample) {
     );
   }
   if (sample.als != null) messages.push({ address: '/mac/als', args: [sample.als] });
-  if (messages.length) oscBridge?.sendMessages(messages, { source: 'macbook' });
+  if (messages.length) sendType('macbook', messages);
 }
 
 function onAudioTick() {
@@ -2060,8 +2128,7 @@ function onGarminStatus({ connected, connecting, reconnecting, name }) {
   if ($('#garmin-status-text')) $('#garmin-status-text').textContent = text;
   $('#garmin-status-dot')?.classList.toggle('connected', !!connected);
   $('#garmin-status-dot')?.classList.toggle('connecting', !!(connecting || reconnecting) && !connected);
-  $('#garmin-nav-dot')?.classList.toggle('connected', !!connected);
-  $('#garmin-nav-dot')?.classList.toggle('connecting', !!(connecting || reconnecting) && !connected);
+  setTypeDot('garmin', { connected, connecting: connecting || reconnecting });
 
   $('#garmin-connect-btn').disabled = !!connected || !!connecting;
   $('#garmin-disconnect-btn').disabled = !garmin?._wantConnect;
@@ -2116,7 +2183,7 @@ function onGarminSample({ hr, trendDelta, name }) {
 
   const messages = [{ address: '/garmin/hr', args: [hrOsc] }];
   if (!opts.trendSmooth) messages.push({ address: '/garmin/trend', args: [trendOsc] });
-  oscBridge?.sendMessages(messages, { source: 'garmin' });
+  sendType('garmin', messages);
 }
 
 function onGarminTrendTick() {
@@ -2127,7 +2194,7 @@ function onGarminTrendTick() {
   const now = performance.now();
   updateGarminTrendUi(trendOsc, trendDelta);
   pushGarminOsc('trend', trendOsc, now);
-  oscBridge?.sendMessages([{ address: '/garmin/trend', args: [trendOsc] }], { source: 'garmin' });
+  sendType('garmin', [{ address: '/garmin/trend', args: [trendOsc] }]);
 }
 
 function updateGarminTrendUi(trendOsc, trendDelta) {
@@ -2142,7 +2209,7 @@ function updateGarminTrendUi(trendOsc, trendDelta) {
 function onGarminBeat(value = 1) {
   if (value === 0) {
     pushGarminOsc('beat', 0);
-    oscBridge?.sendTrigger('/garmin/push_beat', 0, { source: 'garmin' });
+    sendTriggerType('garmin', '/garmin/push_beat', 0);
     if ($('#chart-beat-value')) $('#chart-beat-value').textContent = '0';
     return;
   }
@@ -2162,7 +2229,7 @@ function onGarminBeat(value = 1) {
 
   if (!$('#garmin-send-beats')?.checked) return;
   pushGarminOsc('beat', 1);
-  oscBridge?.sendTrigger('/garmin/push_beat', 1, { source: 'garmin' });
+  sendTriggerType('garmin', '/garmin/push_beat', 1);
 }
 
 async function ensureAudioClock() {
@@ -2684,7 +2751,7 @@ function updateConnectionUI(connected) {
   if ($('#connect-btn-2')) $('#connect-btn-2').disabled = connected;
   const dot = $('#status-dot');
   dot.classList.toggle('connected', connected);
-  $('#controller-nav-dot')?.classList.toggle('connected', connected);
+  setTypeDot('controller', { connected });
   $('#status-text').textContent = connected ? 'Connected' : 'Disconnected';
 }
 

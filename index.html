@@ -17,6 +17,13 @@
         <p class="page-kicker">data → OSC</p>
       </div>
       <div class="header-actions">
+        <div class="session-controls">
+          <input id="session-name" class="text-input session-name" value="untitled" title="Session name" />
+          <button type="button" id="session-new" title="New session">New</button>
+          <button type="button" id="session-open" title="Open session file">Open</button>
+          <button type="button" id="session-save" title="Save session file">Save</button>
+          <input type="file" id="session-file" accept=".json,.oscgate.json,application/json" hidden />
+        </div>
         <div class="osc-header-controls">
           <button
             id="osc-stream-btn"
@@ -27,8 +34,8 @@
             <span class="osc-status-dot" id="osc-header-dot"></span>
             <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:57121</span>
           </button>
-          <button id="osc-config-open" type="button" class="osc-settings-btn" title="OSC settings" aria-label="OSC settings">
-            Edit
+          <button id="osc-config-open" type="button" class="osc-settings-btn" title="Configuration" aria-label="Configuration">
+            Config
           </button>
         </div>
       </div>
@@ -38,10 +45,15 @@
       <div class="modal-backdrop" data-close-osc-modal></div>
       <div class="modal-panel modal-panel-wide">
         <div class="modal-header">
-          <h2 id="osc-modal-title">OSC Configuration</h2>
+          <h2 id="osc-modal-title">Configuration</h2>
           <button type="button" class="modal-close" data-close-osc-modal aria-label="Close">×</button>
         </div>
+        <div class="config-tabs">
+          <button type="button" data-config-tab="osc" class="active">OSC</button>
+          <button type="button" data-config-tab="signals">Signals</button>
+        </div>
         <div class="modal-body">
+          <div id="config-tab-osc">
           <p class="osc-hint">
             Destinations receive UDP OSC from the gateway. The matrix chooses which source
             feeds which destination; empty cells default to <strong>on</strong> (all → all).
@@ -78,6 +90,20 @@
           </div>
 
           <p id="osc-modal-error" class="osc-modal-error hidden"></p>
+          </div>
+          <div id="config-tab-signals" class="hidden">
+            <p class="osc-hint">
+              Default mode for every signal on a newly added source. Existing sources keep their own settings.
+            </p>
+            <div class="control-group">
+              <label>Default mode</label>
+              <div class="signal-modes" id="config-signal-default">
+                <button type="button" data-default-mode="off">OFF</button>
+                <button type="button" data-default-mode="raw" class="active">RAW</button>
+                <button type="button" data-default-mode="auto">AUTO01</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" data-close-osc-modal>Cancel</button>
@@ -95,79 +121,62 @@
         <button type="button" id="sidebar-toggle" class="sidebar-toggle" title="Collapse menu" aria-label="Collapse menu">‹</button>
 
         <nav class="sidebar-nav">
-          <section class="nav-section active" data-section="controller">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="controller">
-                <span class="nav-icon">DS</span>
-                <span class="nav-label">Controller</span>
-                <span class="nav-dot" id="controller-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-
-          <section class="nav-section" data-section="garmin">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="garmin">
-                <span class="nav-icon">HR</span>
-                <span class="nav-label">Garmin HR</span>
-                <span class="nav-dot" id="garmin-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-
-          <section class="nav-section" data-section="macbook">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="macbook">
-                <span class="nav-icon">MB</span>
-                <span class="nav-label">MacBook</span>
-                <span class="nav-dot" id="macbook-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-          <section class="nav-section" data-section="weather">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="weather">
-                <span class="nav-icon">WX</span>
-                <span class="nav-label">Weather</span>
-                <span class="nav-dot" id="weather-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-
-          <section class="nav-section" data-section="mic">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="mic">
-                <span class="nav-icon">MC</span>
-                <span class="nav-label">Microphone</span>
-                <span class="nav-dot" id="mic-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-          <section class="nav-section" data-section="time">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="time">
-                <span class="nav-icon">TM</span>
-                <span class="nav-label">Time</span>
-                <span class="nav-dot" id="time-nav-dot"></span>
-              </button>
-            </div>
-          </section>
-          <section class="nav-section" data-section="human">
-            <div class="nav-section-head">
-              <button type="button" class="nav-select" data-section="human">
-                <span class="nav-icon">YO</span>
-                <span class="nav-label">Human count</span>
-                <span class="nav-dot" id="human-nav-dot"></span>
-              </button>
-            </div>
-          </section>
+          <div class="nav-toolbar">
+            <button type="button" id="source-add-btn" class="source-add-btn" title="Add source (1)" aria-label="Add source"><span class="nav-icon">+</span></button>
+          </div>
+          <div id="nav-sources" class="nav-sources"></div>
+          <div id="nav-in-sep" class="nav-in-sep hidden" hidden>incoming</div>
           <div id="nav-insources" class="nav-insources"></div>
         </nav>
       </aside>
 
+      <div class="workspace">
       <div class="main-column">
         <main>
-        <div id="view-controller" class="view">
+        <div id="view-empty" class="view">
+          <div class="disconnected-overlay">
+            <h2>No sources</h2>
+            <p>Press <kbd>1</kbd> or click <strong>+</strong> to add a source. Save the session to a file when the patch is ready.</p>
+            <button type="button" id="source-add-btn-2" class="primary">Add source</button>
+          </div>
+        </div>
+        <div id="source-signals" class="source-signals panel hidden">
+          <button type="button" id="source-signals-toggle" class="source-signals-toggle" aria-expanded="true">
+            <span class="source-signals-caret" aria-hidden="true">▾</span>
+            Signals
+          </button>
+          <div id="source-signals-body" class="source-signals-body signal-table-host"></div>
+        </div>
+        <div id="view-poll" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="poll-status-dot"></span>
+                <span id="poll-status-text">Idle</span>
+              </div>
+              <div class="nav-actions">
+                <button id="poll-start-btn" class="primary" type="button">Start</button>
+                <button id="poll-stop-btn" type="button" disabled>Stop</button>
+              </div>
+            </div>
+            <p class="nav-hint" id="poll-hint"></p>
+            <p class="osc-hint" id="poll-prefix"></p>
+            <div class="source-settings-grid" id="poll-settings"></div>
+            <div id="poll-location" class="poll-location hidden">
+              <div class="poll-location-bar">
+                <p class="osc-hint" id="poll-location-label">Click the map or use browser location.</p>
+                <button type="button" id="poll-locate-btn">Use browser location</button>
+              </div>
+              <div id="poll-map" class="geomap-host poll-map"></div>
+            </div>
+          </div>
+          <div class="hr-hero panel">
+            <div class="hr-value" id="poll-hero-value">—</div>
+            <div class="hr-unit" id="poll-hero-unit">—</div>
+            <div class="hr-device" id="poll-hero-name">—</div>
+          </div>
+        </div>
+        <div id="view-controller" class="view hidden">
           <div class="source-settings panel">
             <div class="source-settings-bar">
               <div class="status-pill compact">
@@ -427,7 +436,7 @@
                   <div id="tab-osc" class="hidden">
                     <h2>OSC Gateway</h2>
                     <p class="osc-hint">
-                      Destinations and routing are global (header Edit). This tab shows DualSense stream stats.
+                      Destinations and routing are global (header Config). This tab shows DualSense stream stats.
                       Incoming UDP appears in the bottom dock. See <code>OSC_SPEC.md</code> for addresses.
                     </p>
 
@@ -435,7 +444,7 @@
                       <label>Output destinations</label>
                       <div class="osc-row" style="grid-template-columns: 1fr auto;">
                         <input type="text" id="osc-dest-display" class="text-input" readonly value="udp://127.0.0.1:57121" />
-                        <button type="button" id="osc-config-open-tab">Edit…</button>
+                        <button type="button" id="osc-config-open-tab">Config</button>
                       </div>
                     </div>
 
@@ -738,12 +747,12 @@
                 <input type="number" id="weather-interval" class="text-input" min="15" max="900" step="15" value="60" />
               </div>
             </div>
-            <div class="weather-fields" id="weather-fields"></div>
           </div>
           <div class="panel weather-search-panel">
             <div class="weather-search-row">
               <input type="search" id="weather-search" class="text-input" placeholder="Search city…" autocomplete="off" />
               <button type="button" id="weather-search-btn">Search</button>
+              <button type="button" id="weather-locate-btn">Use browser location</button>
             </div>
             <div id="weather-search-results" class="weather-search-results"></div>
             <p class="osc-hint" id="weather-place">Click the map or search to set a location.</p>
@@ -875,7 +884,7 @@
                 <button id="time-stop-btn" disabled>Stop</button>
               </div>
             </div>
-            <p class="nav-hint">Local calendar progress as 0–1. Week starts Monday by default.</p>
+            <p class="nav-hint">Local hour / day / week / month / year as 0–1. Week starts Monday by default.</p>
             <div class="source-settings-grid">
               <div class="control-group">
                 <label for="time-week-start">Week starts</label>
@@ -885,7 +894,6 @@
                 </select>
               </div>
             </div>
-            <div class="time-fields" id="time-fields"></div>
           </div>
           <div class="hr-hero panel">
             <div class="hr-value" id="time-clock">—</div>
@@ -1002,6 +1010,31 @@
           <div id="osc-in-compact" class="osc-in-compact"></div>
         </div>
       </aside>
+      </div>
+      <aside id="out-dock" class="out-dock">
+        <div id="out-dock-resize" class="out-dock-resize" title="Drag to resize"></div>
+        <button type="button" id="out-dock-toggle" class="out-dock-toggle" title="Collapse output" aria-label="Collapse output">›</button>
+        <div class="out-dock-bar">
+          <div class="out-dock-title" id="out-dock-title">Output</div>
+        </div>
+        <div class="out-dock-body" id="out-charts">
+          <p class="osc-hint">Select a source to see its outgoing signals.</p>
+        </div>
+      </aside>
+      </div>
+    </div>
+
+    <div id="source-tip" class="source-tip" role="tooltip" hidden></div>
+    <div id="source-picker" class="source-picker hidden" hidden>
+      <div class="source-picker-backdrop" data-close-picker></div>
+      <div class="source-picker-panel" role="dialog" aria-modal="true" aria-labelledby="source-picker-title">
+        <div class="source-picker-head">
+          <h2 id="source-picker-title">Add source</h2>
+          <button type="button" class="modal-close" data-close-picker aria-label="Close">×</button>
+        </div>
+        <input id="source-picker-filter" class="text-input" type="search" placeholder="Type to find a source…" autocomplete="off" />
+        <div id="source-picker-list" class="source-picker-list"></div>
+        <p class="osc-hint">Type to filter · Esc close</p>
       </div>
     </div>
 

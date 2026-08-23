@@ -35,6 +35,10 @@ export class OscBridge {
     this._lastFlushMs = 0;
     this._lastSent = new Map();
     this.ignoreImu = false;
+    this.controlSource = 'controller';
+    this.controlPrefix = '/ds';
+    this.onOutgoing = null;
+    this.filterOutgoing = null;
     this.destinations = [];
     this.routing = {};
     this.inSources = [];
@@ -218,10 +222,11 @@ export class OscBridge {
    * Send OSC messages immediately (Garmin HR/trend, etc.).
    * Continuous values are change-diffed unless `force` is set.
    */
-  sendMessages(messages, { force = false, source = 'controller' } = {}) {
+  sendMessages(messages, { force = false, source = 'controller', processed = false } = {}) {
     if (!this.enabled) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const out = force ? messages : this._diff(messages, source);
+    const allowed = !processed && this.filterOutgoing ? this.filterOutgoing(source, messages) : messages;
+    const out = force ? allowed : this._diff(allowed, source);
     if (!out.length) return;
     if (this._send({ type: 'bundle', source, messages: out })) {
       this.stats.sentBundles++;
@@ -231,7 +236,10 @@ export class OscBridge {
   /** Fire-and-forget trigger (bypasses latest-wins bundle queue). */
   sendTrigger(address, value = 1, { source = 'controller' } = {}) {
     if (!this.enabled) return;
-    this._send({ type: 'message', source, address, args: [Number(value)] });
+    const messages = [{ address, args: [Number(value)] }];
+    const allowed = this.filterOutgoing ? this.filterOutgoing(source, messages) : messages;
+    if (!allowed.length) return;
+    this._send({ type: 'message', source, address: allowed[0].address, args: allowed[0].args });
   }
 
   /**
@@ -258,11 +266,20 @@ export class OscBridge {
     this._latestState = null;
     this._lastFlushMs = now;
 
-    const all = stateToOscMessages(state, { ignoreImu: this.ignoreImu });
-    const changed = this._diff(all, 'controller');
-    if (!changed.length) return;
+    let all = stateToOscMessages(state, { ignoreImu: this.ignoreImu });
+    if (this.controlPrefix && this.controlPrefix !== '/ds') {
+      all = all.map((m) => ({
+        ...m,
+        address: m.address.startsWith('/ds') ? `${this.controlPrefix}${m.address.slice(3)}` : m.address,
+      }));
+    }
+    const source = this.controlSource || 'controller';
+    const changed = this._diff(all, source);
+    if (changed.length) this.onOutgoing?.(source, changed);
+    const send = this.filterOutgoing ? this.filterOutgoing(source, changed) : changed;
+    if (!send.length) return;
 
-    if (this._send({ type: 'bundle', source: 'controller', messages: changed })) {
+    if (this._send({ type: 'bundle', source, messages: send })) {
       this.stats.sentBundles++;
     }
   }

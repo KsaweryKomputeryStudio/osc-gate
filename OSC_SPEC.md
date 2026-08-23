@@ -24,7 +24,9 @@ Human ──YOLO + camera─────▶┘
 
 Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
 
-Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/marine`, `/gbif`, `/hn`, `/wiki`, `/iss`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`).
+
+Each source **instance** in a session gets a numeric id: `/weather/1/temp`, `/weather/2/temp`. Sessions are saved/opened as JSON; the last session is restored on startup.
 
 ---
 
@@ -178,6 +180,7 @@ Local-timezone calendar progress as **0–1**. `0` is the start of the period, `
 
 | Address | Args | Meaning |
 |---------|------|---------|
+| `/time/hour` | f | Start of hour → next hour |
 | `/time/day` | f | Midnight → next midnight |
 | `/time/week` | f | Start of week 00:00 → next week |
 | `/time/month` | f | 1st 00:00 → next month |

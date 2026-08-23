@@ -28,6 +28,20 @@ function yToLat(y, z) {
   return (180 / Math.PI) * Math.atan(Math.sinh(n));
 }
 
+export function readBrowserLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Geolocation not available in this browser'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      (err) => reject(new Error(err?.message || 'Location unavailable')),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  });
+}
+
 export class GeoMap {
   constructor(host, { lat = 40, lon = 10, zoom = 3, onPick } = {}) {
     this.host = host;
@@ -95,17 +109,11 @@ export class GeoMap {
   }
 
   locate() {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        this.setPick(lat, lon);
-        this.onPick({ lat, lon, source: 'locate' });
-      },
-      () => {},
-      { enableHighAccuracy: true, timeout: 8000 },
-    );
+    return readBrowserLocation().then(({ lat, lon }) => {
+      this.setPick(lat, lon);
+      this.onPick({ lat, lon, source: 'locate' });
+      return { lat, lon };
+    });
   }
 
   resize() {

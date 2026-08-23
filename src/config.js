@@ -9,7 +9,11 @@ const STORAGE_KEY = 'osc-gate-config';
 const LEGACY_KEY = 'dualsense-osc-config';
 
 export const DEFAULT_CONFIG = {
-  version: 1,
+  version: 2,
+  session: {
+    name: 'untitled',
+  },
+  sources: [],
   osc: {
     host: '127.0.0.1',
     port: 57121,
@@ -26,7 +30,11 @@ export const DEFAULT_CONFIG = {
     oscInCollapsed: false,
     oscInMode: 'compact',
     oscInHeight: 280,
-    activeSection: 'controller',
+    activeSection: '',
+    outCollapsed: false,
+    outWidth: 380,
+    signalsCollapsed: false,
+    configTab: 'osc',
     inEndpointOpen: {},
     sectionsOpen: {
       controller: true,
@@ -37,6 +45,9 @@ export const DEFAULT_CONFIG = {
       time: true,
       human: true,
     },
+  },
+  signals: {
+    defaultMode: 'raw',
   },
   controller: {
     ignoreImu: true,
@@ -68,11 +79,9 @@ export const DEFAULT_CONFIG = {
     fields: {
       temp: true,
       feels: false,
-      humidity: false,
-      humidity01: true,
+      humidity: true,
       windSpeed: true,
-      windDir: false,
-      windDir01: true,
+      windDir: true,
       windGust: false,
       clouds: true,
       pressure: false,
@@ -94,6 +103,7 @@ export const DEFAULT_CONFIG = {
     weekStart: 1,
     hz: 4,
     fields: {
+      hour: true,
       day: true,
       week: true,
       month: true,
@@ -176,11 +186,30 @@ function normalizeLoaded(cfg) {
     port: destinations[0].port,
     inPort: Number.isInteger(inPort) && inPort >= 1 && inPort <= 65535 ? inPort : 9001,
   };
+  cfg.session = { name: String(cfg.session?.name || 'untitled') };
+  cfg.sources = Array.isArray(cfg.sources) ? cfg.sources.filter(Boolean).map(normalizeSource) : [];
   return cfg;
+}
+
+function normalizeSource(s, i) {
+  return {
+    id: String(s.id || `s_${i}`),
+    type: String(s.type || ''),
+    slot: Math.max(1, Number(s.slot) || i + 1),
+    name: String(s.name || s.type || `Source ${i + 1}`),
+    settings: isPlainObject(s.settings) ? s.settings : {},
+    signals: isPlainObject(s.signals) ? s.signals : {},
+  };
 }
 
 export function saveConfig(partial = {}) {
   const next = mergeDeep(loadConfig(), partial);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function replaceConfig(cfg) {
+  const next = normalizeLoaded(mergeDeep(DEFAULT_CONFIG, cfg && typeof cfg === 'object' ? cfg : {}));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   return next;
 }

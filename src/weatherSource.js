@@ -9,10 +9,8 @@ export const WEATHER_FIELDS = [
   { id: 'temp', address: '/weather/temp', label: 'Temp °C' },
   { id: 'feels', address: '/weather/feels', label: 'Feels °C' },
   { id: 'humidity', address: '/weather/humidity', label: 'Humidity %' },
-  { id: 'humidity01', address: '/weather/humidity/norm', label: 'Humidity 0–1' },
   { id: 'windSpeed', address: '/weather/wind/speed', label: 'Wind km/h' },
   { id: 'windDir', address: '/weather/wind/dir', label: 'Wind dir °' },
-  { id: 'windDir01', address: '/weather/wind/dir/norm', label: 'Wind dir 0–1' },
   { id: 'windGust', address: '/weather/wind/gust', label: 'Gust km/h' },
   { id: 'clouds', address: '/weather/clouds', label: 'Clouds %' },
   { id: 'pressure', address: '/weather/pressure', label: 'Pressure' },
@@ -26,11 +24,9 @@ export const WEATHER_FIELDS = [
 export const DEFAULT_WEATHER_FIELDS = {
   temp: true,
   feels: false,
-  humidity: false,
-  humidity01: true,
+  humidity: true,
   windSpeed: true,
-  windDir: false,
-  windDir01: true,
+  windDir: true,
   windGust: false,
   clouds: true,
   pressure: false,
@@ -79,10 +75,8 @@ export function weatherToValues(cur, lat, lon) {
     temp: Number(cur.temperature_2m),
     feels: Number(cur.apparent_temperature),
     humidity,
-    humidity01: Number.isFinite(humidity) ? humidity / 100 : NaN,
     windSpeed: Number(cur.wind_speed_10m),
     windDir: dir,
-    windDir01: Number.isFinite(dir) ? dir / 360 : NaN,
     windGust: Number(cur.wind_gusts_10m),
     clouds: Number(cur.cloud_cover),
     pressure: Number(cur.pressure_msl),
@@ -98,7 +92,7 @@ export function weatherToValues(cur, lat, lon) {
 export function weatherToOsc(values, fields) {
   const msgs = [];
   for (const f of WEATHER_FIELDS) {
-    if (!fields?.[f.id]) continue;
+    if (fields && fields[f.id] === false) continue;
     const v = values[f.id];
     if (!Number.isFinite(v)) continue;
     msgs.push({ address: f.address, args: [v] });
