@@ -39,14 +39,10 @@ export function setupOutCharts({ $, saveConfig, loadConfig }) {
   }
 
   function applyWidth() {
-    if (dock.classList.contains('collapsed')) {
-      dock.style.width = '';
-      return;
-    }
     const w = Number(loadConfig().ui.outWidth);
-    if (Number.isFinite(w) && w >= 300 && w <= 720) {
-      dock.style.width = `${w}px`;
-    }
+    const px = Number.isFinite(w) && w >= 300 && w <= 720 ? Math.round(w) : 380;
+    dock.style.setProperty('--out-w', `${px}px`);
+    dock.style.removeProperty('width');
   }
 
   if (loadConfig().ui.outCollapsed) dock.classList.add('collapsed');
@@ -68,7 +64,7 @@ export function setupOutCharts({ $, saveConfig, loadConfig }) {
       dock.classList.add('resizing');
       const move = (ev) => {
         const next = Math.min(720, Math.max(300, startW - (ev.clientX - startX)));
-        dock.style.width = `${next}px`;
+        dock.style.setProperty('--out-w', `${next}px`);
       };
       const up = () => {
         dock.classList.remove('resizing');

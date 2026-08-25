@@ -1,4 +1,4 @@
-# osc-gate OSC Spec
+# DATA-DRIVER OSC Spec
 
 Multipurpose data → OSC. All **DualSense outbound** values are **floats in `[0.0, 1.0]`**.  
 Garmin HR is **bpm** by default, or **0–1** when Normalize HR is on. Trend is always **0–1**.  
@@ -24,7 +24,7 @@ Human ──YOLO + camera─────▶┘
 
 Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
 
-Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/marine`, `/gbif`, `/hn`, `/wiki`, `/iss`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`).
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
 
 Each source **instance** in a session gets a numeric id: `/weather/1/temp`, `/weather/2/temp`. Sessions are saved/opened as JSON; the last session is restored on startup.
 
@@ -124,7 +124,7 @@ Requires **Broadcast Heart Rate** on the watch (Sensors → Heart Rate → Broad
 
 ## MacBook sensors — `/mac`
 
-Chrome **WebHID** on this sensor is limited to about **1 Hz**. osc-gate reads the hinge in the **local gateway** with hidapi (same path as the native lid-angle demos) and streams samples to the UI over WebSocket. Keep `./run` going, then Connect MacBook.
+Chrome **WebHID** on this sensor is limited to about **1 Hz**. DATA-DRIVER reads the hinge in the **local gateway** with hidapi (same path as the native lid-angle demos) and streams samples to the UI over WebSocket. Keep `./run` going, then Connect MacBook.
 
 Internal accelerometer / gyro (AppleSPU) are usually **not** exposed to the browser (macOS keeps them for the Sensor Processing Unit; native tools need admin). If Chrome or the Generic Sensor API does expose motion or ambient light, those addresses are sent too.
 

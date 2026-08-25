@@ -4,6 +4,7 @@
 
 import { loadConfig, saveConfig } from './config.js';
 import { fetchPoll } from './pollFetchers.js';
+import { isStreamType, startStream } from './streamSources.js';
 import {
   SOURCE_CATEGORIES,
   instanceAddress,
@@ -322,6 +323,11 @@ function renderPollView($, inst) {
   if (settings.pair != null) rows.push(fieldHtml('pair', 'Pair', settings.pair, 'text'));
   if (settings.currency != null) rows.push(fieldHtml('currency', 'Currency', settings.currency, 'text'));
   if (settings.city != null) rows.push(fieldHtml('city', 'City', settings.city, 'text'));
+  if (settings.host != null) rows.push(fieldHtml('host', 'Instance host', settings.host, 'text'));
+  if (settings.user != null) rows.push(fieldHtml('user', 'User', settings.user, 'text'));
+  if (settings.norad != null) rows.push(fieldHtml('norad', 'NORAD id', settings.norad, 'number'));
+  if (settings.wiki != null) rows.push(fieldHtml('wiki', 'Wiki (e.g. enwiki)', settings.wiki, 'text'));
+  if (settings.radiusKm != null) rows.push(fieldHtml('radiusKm', 'Radius km', settings.radiusKm, 'number'));
   if (settings.apiKey != null || typeNeedsKey(spec)) {
     rows.push(
       fieldHtml('apiKey', 'API key', settings.apiKey ?? '', 'password', {
@@ -348,6 +354,7 @@ function fieldHtml(key, label, value, type, extra = {}) {
 }
 
 function missingApiKey(inst) {
+  if (inst?.type === 'lastfm' && !String(inst?.settings?.user || '').trim()) return true;
   if (!typeNeedsKey(sourceType(inst?.type))) return false;
   return !String(inst?.settings?.apiKey || '').trim();
 }
@@ -425,7 +432,9 @@ function refreshPollChrome($, inst) {
     $('#poll-status-text').textContent = running
       ? 'Live'
       : missingApiKey(inst)
-        ? 'API key required'
+        ? inst.type === 'lastfm'
+          ? 'User + API key required'
+          : 'API key required'
         : 'Idle';
   }
   if ($('#poll-start-btn')) $('#poll-start-btn').disabled = running;
@@ -440,12 +449,22 @@ function startPoll(inst, { $, oscBridge, outCharts }) {
     refreshPollChrome($, inst);
     return;
   }
+  if (inst.type === 'lastfm' && !String(inst.settings?.user || '').trim()) {
+    refreshPollChrome($, inst);
+    return;
+  }
+  const run = { timer: null, last: null, stream: null };
+  if (spec.stream || isStreamType(inst.type)) {
+    run.stream = startStream(inst.type, inst.settings || {});
+  }
   const tick = async () => {
-    const run = pollRuns.get(inst.id);
-    if (!run) return;
+    const current = pollRuns.get(inst.id);
+    if (!current) return;
     try {
-      const result = await fetchPoll(inst.type, inst.settings, run.last);
-      run.last = result;
+      const result = current.stream
+        ? current.stream.sample()
+        : await fetchPoll(inst.type, inst.settings, current.last);
+      current.last = result;
       const values = result.values || {};
       applyPollSample($, inst, spec, result);
       const messages = (spec.fields || []).map((f) => ({
@@ -461,9 +480,10 @@ function startPoll(inst, { $, oscBridge, outCharts }) {
       setTypeDot(inst.type, { connected: false });
     }
   };
-  const ms = Math.max(2000, Number(inst.settings?.intervalSec || 30) * 1000);
-  const timer = setInterval(tick, ms);
-  pollRuns.set(inst.id, { timer, last: null });
+  const minMs = spec.stream || isStreamType(inst.type) ? 400 : 2000;
+  const ms = Math.max(minMs, Number(inst.settings?.intervalSec || 30) * 1000);
+  run.timer = setInterval(tick, ms);
+  pollRuns.set(inst.id, run);
   refreshPollChrome($, inst);
   tick();
 }
@@ -483,6 +503,11 @@ function applyPollSample($, inst, spec, result) {
 function stopPoll(id) {
   const run = pollRuns.get(id);
   if (run?.timer) clearInterval(run.timer);
+  try {
+    run?.stream?.stop?.();
+  } catch {
+    /* ignore */
+  }
   pollRuns.delete(id);
 }
 

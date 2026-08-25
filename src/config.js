@@ -1,5 +1,5 @@
 /**
- * Persisted osc-gate configuration (localStorage).
+ * Persisted DATA-DRIVER configuration (localStorage).
  * Survives restarts; migrates the old DualSense-only key.
  */
 

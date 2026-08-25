@@ -23,7 +23,7 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo "==> osc-gate"
+echo "==> DATA-DRIVER"
 echo "    OSC gateway  →  ws://127.0.0.1:8081"
 echo "    Web UI       →  http://localhost:5173"
 echo "    OSC out/in   →  udp :57121 / :9001  (change in UI)"

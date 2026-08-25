@@ -2,6 +2,16 @@
  * Fetchers for poll-kind sources. Each returns { values, label }.
  */
 
+import {
+  twoline2satrec,
+  propagate,
+  gstime,
+  eciToEcf,
+  ecfToLookAngles,
+  degreesToRadians,
+  radiansToDegrees,
+} from 'satellite.js';
+
 function clamp01(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
@@ -12,8 +22,6 @@ function num(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
-const hnState = { last: null };
 
 export async function fetchPoll(type, settings = {}, prev = null) {
   switch (type) {
@@ -107,6 +115,22 @@ export async function fetchPoll(type, settings = {}, prev = null) {
       return fetchYesno();
     case 'nbp':
       return fetchNbp(settings);
+    case 'gtfs':
+      return fetchGtfs();
+    case 'gdacs':
+      return fetchGdacs();
+    case 'inat':
+      return fetchInat(settings);
+    case 'hydro':
+      return fetchHydro(settings);
+    case 'masto':
+      return fetchMasto(settings, prev);
+    case 'lastfm':
+      return fetchLastfm(settings);
+    case 'sat':
+      return fetchSat(settings);
+    case 'holiday':
+      return fetchHoliday();
     default:
       throw new Error(`Unknown poll source ${type}`);
   }
@@ -851,10 +875,231 @@ async function fetchNbp({ currency = 'USD' } = {}) {
   };
 }
 
+async function fetchGtfs() {
+  const data = await getJson('https://ckan2.multimediagdansk.pl/gpsPositions?v=2');
+  const vehicles = data?.vehicles || [];
+  let moving = 0;
+  let speed = 0;
+  let late = 0;
+  for (const v of vehicles) {
+    const s = num(v?.speed);
+    speed = Math.max(speed, s);
+    if (s >= 1) moving += 1;
+    if (num(v?.delay) > 60) late += 1;
+  }
+  return {
+    label: `${vehicles.length} vehicles`,
+    values: {
+      count: vehicles.length,
+      moving,
+      speed: Math.round(speed),
+      late,
+    },
+  };
+}
+
+async function fetchGdacs() {
+  const data = await getJson('https://www.gdacs.org/gdacsapi/api/events/geteventlist/EVENTS4APP');
+  const feats = data?.features || [];
+  let red = 0;
+  let orange = 0;
+  for (const f of feats) {
+    const lv = String(f?.properties?.alertlevel || '').toLowerCase();
+    if (lv === 'red') red += 1;
+    else if (lv === 'orange') orange += 1;
+  }
+  return {
+    label: `${feats.length} events · ${red} red`,
+    values: {
+      count: feats.length,
+      red,
+      orange,
+    },
+  };
+}
+
+async function fetchInat({ lat = 54.52, lon = 18.53, radiusKm = 25 } = {}) {
+  const day = new Date().toISOString().slice(0, 10);
+  const q = `lat=${num(lat)}&lng=${num(lon)}&radius=${num(radiusKm, 25)}&per_page=1`;
+  const [todayData, allData] = await Promise.all([
+    getJson(`https://api.inaturalist.org/v1/observations?${q}&d1=${day}`),
+    getJson(`https://api.inaturalist.org/v1/observations?${q}`),
+  ]);
+  const today = num(todayData?.total_results);
+  const total = num(allData?.total_results);
+  return {
+    label: `${today} today near ${num(lat).toFixed(2)},${num(lon).toFixed(2)}`,
+    values: { today, total },
+  };
+}
+
+async function fetchHydro({ stationId = 154180220 } = {}) {
+  const id = encodeURIComponent(String(stationId || '154180220'));
+  const rows = await getJson(`https://danepubliczne.imgw.pl/api/data/hydro/id/${id}`);
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  const level = num(row?.stan_wody);
+  const warnAt = num(row?.stan_ostrzegawczy);
+  const alarmAt = num(row?.stan_alarmowy);
+  return {
+    label: `${row?.stacja || id} ${level} cm`,
+    values: {
+      level,
+      warn: warnAt && level >= warnAt ? 1 : 0,
+      alarm: alarmAt && level >= alarmAt ? 1 : 0,
+    },
+  };
+}
+
+const mastoState = { lastId: '' };
+
+async function fetchMasto({ host = 'fosstodon.org' } = {}, prev = null) {
+  const h = String(host || 'fosstodon.org')
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  const rows = await getJson(`https://${h}/api/v1/timelines/public?limit=40`);
+  const list = Array.isArray(rows) ? rows : [];
+  const newest = String(list[0]?.id || '');
+  const last = String(prev?.lastId || mastoState.lastId || '');
+  let delta = 0;
+  if (last && newest) {
+    try {
+      const cut = BigInt(last);
+      delta = list.filter((r) => {
+        try {
+          return BigInt(r.id) > cut;
+        } catch {
+          return false;
+        }
+      }).length;
+    } catch {
+      delta = 0;
+    }
+  }
+  mastoState.lastId = newest || last;
+  let chars = 0;
+  let n = 0;
+  for (const r of list.slice(0, 10)) {
+    const text = String(r?.content || '').replace(/<[^>]+>/g, '');
+    if (!text) continue;
+    chars += text.length;
+    n += 1;
+  }
+  return {
+    label: delta ? `+${delta} on ${h}` : h,
+    lastId: newest,
+    values: {
+      delta,
+      chars: n ? Math.round(chars / n) : 0,
+    },
+  };
+}
+
+async function fetchLastfm({ apiKey = '', user = '' } = {}) {
+  const key = encodeURIComponent(String(apiKey || '').trim());
+  const who = encodeURIComponent(String(user || '').trim());
+  if (!who) throw new Error('Last.fm user required');
+  const data = await getJson(
+    `https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user=${who}&api_key=${key}&limit=1&format=json`,
+  );
+  if (data?.error) throw new Error(data.message || 'Last.fm error');
+  const track = data?.recenttracks?.track;
+  const row = Array.isArray(track) ? track[0] : track;
+  const playing = row?.['@attr']?.nowplaying === 'true' || row?.['@attr']?.nowplaying === true ? 1 : 0;
+  const name = `${row?.artist?.['#text'] || row?.artist?.name || ''} ${row?.name || ''}`.trim();
+  return {
+    label: playing ? `now: ${name || 'playing'}` : name || 'idle',
+    values: {
+      playing,
+      hash: hash01(name),
+    },
+  };
+}
+
+const satCache = { norad: 0, at: 0, rec: null, name: '' };
+
+async function fetchSat({ norad = 25544, lat = 54.52, lon = 18.53 } = {}) {
+  const id = Number(norad) || 25544;
+  const now = Date.now();
+  if (!satCache.rec || satCache.norad !== id || now - satCache.at > 2 * 3600 * 1000) {
+    const text = await getText(`https://celestrak.org/NORAD/elements/gp.php?CATNR=${id}&FORMAT=TLE`);
+    const tle = parseTle(text);
+    satCache.rec = twoline2satrec(tle.l1, tle.l2);
+    satCache.name = tle.name || String(id);
+    satCache.norad = id;
+    satCache.at = now;
+  }
+  const date = new Date();
+  const pv = propagate(satCache.rec, date);
+  if (!pv?.position || pv.position === false) throw new Error('Propagate failed (decayed?)');
+  const observer = {
+    longitude: degreesToRadians(num(lon)),
+    latitude: degreesToRadians(num(lat)),
+    height: 0.05,
+  };
+  const gmst = gstime(date);
+  const look = ecfToLookAngles(observer, eciToEcf(pv.position, gmst));
+  const az = radiansToDegrees(look.azimuth);
+  const el = radiansToDegrees(look.elevation);
+  const range = num(look.rangeSat);
+  return {
+    label: `${satCache.name} el ${el.toFixed(1)}°`,
+    values: {
+      az: Math.round(az * 10) / 10,
+      el: Math.round(el * 10) / 10,
+      range: Math.round(range),
+      visible: el > 0 ? 1 : 0,
+    },
+  };
+}
+
+async function fetchHoliday() {
+  const rows = await getJson('https://date.nager.at/api/v3/NextPublicHolidays/PL');
+  const next = Array.isArray(rows) ? rows[0] : null;
+  const when = Date.parse(next?.date);
+  const days = Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 86400000)) : 0;
+  return {
+    label: next ? `${next.localName || next.name} in ${days}d` : 'no holiday',
+    values: {
+      days,
+      today: days === 0 ? 1 : 0,
+    },
+  };
+}
+
+function parseTle(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    if (lines[i].startsWith('1 ') && lines[i + 1].startsWith('2 ')) {
+      const name = i > 0 && !lines[i - 1].startsWith('1 ') ? lines[i - 1] : '';
+      return { name, l1: lines[i], l2: lines[i + 1] };
+    }
+  }
+  throw new Error('No TLE in Celestrak response');
+}
+
+function hash01(s) {
+  let h = 2166136261;
+  for (const c of String(s || '')) {
+    h ^= c.charCodeAt(0);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 1000) / 1000;
+}
+
 async function getJson(url) {
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw httpError(res, url);
   return res.json();
+}
+
+async function getText(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw httpError(res, url);
+  return res.text();
 }
 
 async function postJson(url, body) {
@@ -878,5 +1123,3 @@ function httpError(res, url) {
   if (res.status === 401 || res.status === 403) return new Error(`Invalid API key (${host})`);
   return new Error(`${res.status} ${host}`);
 }
-
-void hnState;

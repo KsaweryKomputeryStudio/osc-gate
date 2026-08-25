@@ -1,4 +1,4 @@
-# osc-gate
+# DATA-DRIVER
 
 Multipurpose **data → OSC** gateway. Browser sources (DualSense, Garmin heart rate, …) stream to UDP OSC through a local WebSocket gateway.
 

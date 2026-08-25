@@ -460,18 +460,23 @@ input[type='color'] {
   position: relative;
   flex-shrink: 0;
   width: var(--out-w, 380px);
+  min-width: 0;
   border-left: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.62);
   display: flex;
   flex-direction: column;
   min-height: 0;
   z-index: 5;
+  overflow: visible;
+  transition: width 0.18s ease, height 0.18s ease;
 }
 
 .out-dock.collapsed {
   width: 36px;
-  min-width: 36px;
-  max-width: 36px;
+}
+
+.out-dock.resizing {
+  transition: none;
 }
 
 .out-dock-resize {
@@ -2364,16 +2369,23 @@ input[type='range'] {
   position: relative;
   flex-shrink: 0;
   height: var(--osc-in-h, 280px);
+  min-height: 0;
   border-top: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.62);
   display: flex;
   flex-direction: column;
   overflow: visible;
   z-index: 5;
+  transition: height 0.18s ease;
 }
 
 .osc-in-dock.collapsed {
   height: 36px;
+}
+
+.osc-in-dock.resizing {
+  transition: none;
+  user-select: none;
 }
 
 .osc-in-resize {
@@ -2401,10 +2413,6 @@ input[type='range'] {
 .osc-in-resize:hover::after,
 .osc-in-dock.resizing .osc-in-resize::after {
   background: var(--accent);
-}
-
-.osc-in-dock.resizing {
-  user-select: none;
 }
 
 .osc-in-toggle {
@@ -2723,12 +2731,16 @@ input[type='range'] {
     flex-direction: column;
   }
 
-  .out-dock,
-  .out-dock.collapsed {
+  .out-dock {
     width: 100%;
     height: 200px;
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+
+  .out-dock.collapsed {
+    width: 100%;
+    height: 36px;
   }
 
   .sidebar,

@@ -1,5 +1,5 @@
 /**
- * osc-gate OSC Gateway
+ * DATA-DRIVER OSC Gateway
  *
  * Bridges browser sources (WebHID / Web Bluetooth) ↔ WebSocket ↔ OSC UDP.
  *
