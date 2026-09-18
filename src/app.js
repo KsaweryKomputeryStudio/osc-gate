@@ -2313,7 +2313,11 @@ function applyEncoderHello(info) {
   const inst = instanceOfType('encoder');
   if (inst) syncEncoderView(inst);
   for (const row of listInstances().filter((s) => s.type === 'encoder')) {
-    if (row.settings?.autoConnect && !encoderState(row.id).connected) connectEncoder(row);
+    const st = encoderState(row.id);
+    st.connected = false;
+    st.connecting = false;
+    if (row.settings?.autoConnect) connectEncoder(row);
+    else onEncoderStatus(row.id, { connected: false, backend: encoderInfo.backend });
   }
 }
 

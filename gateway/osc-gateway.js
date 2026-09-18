@@ -480,9 +480,11 @@ wss.on('connection', (ws) => {
     if (msg.type === 'encoder') {
       const id = String(msg.id || '');
       if (!msg.enabled) {
+        console.log(`[encoder] stop ${id}`);
         encoders.stop(id);
         return;
       }
+      console.log(`[encoder] start ${id} clk=${msg.clk} dt=${msg.dt} sw=${msg.sw}`);
       encoderInfo = probeEncoder();
       encoders.start(id, msg).catch((err) => {
         ws.send(

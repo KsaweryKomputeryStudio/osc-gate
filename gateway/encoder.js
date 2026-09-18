@@ -213,11 +213,17 @@ class EncoderWatcher {
   }
 
   _onPinctrlLine(line) {
-    const m = String(line).match(/^(\d+)\s*:\s*(hi|lo)\s*->\s*(hi|lo)/i);
-    if (!m) return;
-    const pin = Number(m[1]);
-    const value = m[3].toLowerCase() === 'hi' ? 1 : 0;
-    this._onLevel(pin, value);
+    const s = String(line).trim();
+    // Older pinctrl: "17: lo -> hi"
+    const arrow = s.match(/^(\d+)\s*:\s*(hi|lo)\s*->\s*(hi|lo)/i);
+    if (arrow) {
+      this._onLevel(Number(arrow[1]), arrow[3].toLowerCase() === 'hi' ? 1 : 0);
+      return;
+    }
+    // Current Raspberry Pi OS: "17: hi // GPIO17" and "+123us" timestamps
+    const level = s.match(/^(\d+)\s*:\s*(hi|lo)\b/i);
+    if (!level) return;
+    this._onLevel(Number(level[1]), level[2].toLowerCase() === 'hi' ? 1 : 0);
   }
 
   async _startOnoff() {
