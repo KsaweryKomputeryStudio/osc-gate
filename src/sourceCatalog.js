@@ -3,6 +3,8 @@
  * `kind: 'view'` uses a dedicated main view; `kind: 'poll'` uses the generic poll view.
  */
 
+import { DEFAULT_ENCODER_SETTINGS } from './encoderSource.js';
+
 export const SOURCE_CATEGORIES = [
   {
     id: 'hardware',
@@ -41,6 +43,21 @@ export const SOURCE_CATEGORIES = [
       },
       { id: 'human', label: 'Human count', icon: 'YO', prefix: '/human', kind: 'view', hint: 'Webcam + YOLOv8n person count.' },
       { id: 'hands', label: 'Hands', icon: 'HA', prefix: '/hands', kind: 'view', hint: 'MediaPipe left/right hand landmarks, 0–1 values, and gestures.' },
+    ],
+  },
+  {
+    id: 'raspberry',
+    label: 'Raspberry',
+    types: [
+      {
+        id: 'encoder',
+        label: 'Encoder',
+        icon: 'EN',
+        prefix: '/encoder',
+        kind: 'view',
+        hint: 'Rotary encoder + switch on Pi GPIO (CLK / DT / SW). RAW triggers or MODESELECTOR levels.',
+        defaults: structuredClone(DEFAULT_ENCODER_SETTINGS),
+      },
     ],
   },
   {

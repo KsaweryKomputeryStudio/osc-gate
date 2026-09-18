@@ -1247,6 +1247,78 @@
           </div>
         </div>
 
+        <div id="view-encoder" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="encoder-status-dot"></span>
+                <span id="encoder-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="encoder-connect-btn" class="primary">Connect</button>
+                <button id="encoder-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">Raspberry Pi GPIO. BCM pin numbers. Run the gateway on the Pi. KY-040: CLK / DT / SW to 3V3, GND, and three GPIOs.</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="encoder-clk">CLK (BCM)</label>
+                <input type="number" id="encoder-clk" class="text-input" min="0" max="27" step="1" value="17" />
+              </div>
+              <div class="control-group">
+                <label for="encoder-dt">DT (BCM)</label>
+                <input type="number" id="encoder-dt" class="text-input" min="0" max="27" step="1" value="18" />
+              </div>
+              <div class="control-group">
+                <label for="encoder-sw">SW (BCM)</label>
+                <input type="number" id="encoder-sw" class="text-input" min="0" max="27" step="1" value="27" />
+              </div>
+              <div class="control-group">
+                <label for="encoder-invert">Invert rotation</label>
+                <input type="checkbox" id="encoder-invert" />
+              </div>
+              <div class="control-group">
+                <label>Behaviour</label>
+                <div class="insource-modes" id="encoder-mode">
+                  <button type="button" data-mode="raw" class="active">RAW</button>
+                  <button type="button" data-mode="modeselector">MODESELECTOR</button>
+                </div>
+              </div>
+            </div>
+            <div id="encoder-selector-settings" class="hidden">
+              <div class="source-settings-grid">
+                <div class="control-group">
+                  <label for="encoder-signal-count">Signals</label>
+                  <input type="number" id="encoder-signal-count" class="text-input" min="1" max="16" step="1" value="4" />
+                </div>
+              </div>
+              <div class="encoder-sig-list" id="encoder-sig-list"></div>
+              <p class="nav-hint">Each signal has a name and a step count. 100 steps maps 0–1 onto 100 clicks. Switch cycles the signal and sends its name.</p>
+            </div>
+          </div>
+          <div id="encoder-warning" class="warning-banner hidden">
+            Encoder GPIO needs the local gateway on a Raspberry Pi. Keep the gateway running.
+          </div>
+          <div id="encoder-disconnected" class="disconnected-overlay">
+            <h2 id="encoder-overlay-title">No encoder</h2>
+            <p>Connect to read CLK / DT / SW. RAW sends rotation and switch as triggers. MODESELECTOR uses the switch to pick a named signal and rotation to set its 0–1 level.</p>
+            <p id="encoder-error" class="nav-hint"></p>
+            <button id="encoder-connect-btn-2" class="primary" type="button">Connect encoder</button>
+          </div>
+          <div id="encoder-live" class="hidden">
+            <div class="hr-hero panel" id="encoder-hero">
+              <div class="hr-value" id="encoder-hero-value">—</div>
+              <div class="hr-unit" id="encoder-hero-unit">Encoder</div>
+            </div>
+            <div class="encoder-pads" id="encoder-pads">
+              <div class="encoder-pad" data-enc="ccw">CCW</div>
+              <div class="encoder-pad" data-enc="sw">SW</div>
+              <div class="encoder-pad" data-enc="cw">CW</div>
+            </div>
+            <div class="panel encoder-meters hidden" id="encoder-meters"></div>
+          </div>
+        </div>
+
         <div id="view-insource" class="view hidden">
           <div class="panel insource-head">
             <div class="insource-head-row">

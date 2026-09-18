@@ -12,6 +12,7 @@ import { midiSignalRows } from './midiSource.js';
 import { gamepadSignalRows } from './gamepadSource.js';
 import { handsSignalRows } from './handsSource.js';
 import { soundcardSignalRows } from './soundcardSource.js';
+import { encoderSignalRows } from './encoderSource.js';
 import { scale01 } from './oscInScale.js';
 
 const listeners = new Set();
@@ -251,7 +252,9 @@ export function listKnownSignals(inst) {
           ? handsSignalRows()
           : inst.type === 'soundcard'
             ? soundcardSignalRows(inst)
-            : VIEW_SIGNALS[inst.type] || [];
+            : inst.type === 'encoder'
+              ? encoderSignalRows(inst)
+              : VIEW_SIGNALS[inst.type] || [];
   return viewRows.map((s) => ({
     key: s.key,
     address: `${instancePrefix(inst)}/${s.key}`,

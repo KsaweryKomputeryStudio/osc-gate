@@ -29,6 +29,7 @@ function esc(s) {
 }
 
 function fmt(n) {
+  if (typeof n === 'string') return n || '—';
   if (!Number.isFinite(n)) return '—';
   return Number.isInteger(n) ? String(n) : n.toFixed(3);
 }

@@ -25,6 +25,15 @@ import {
   flattenHands,
 } from './handsSource.js';
 import { flattenSoundcard, SOUNDCARD_MAX_CHANNELS } from './soundcardSource.js';
+import {
+  applyEncoderSwitch,
+  applyEncoderTurn,
+  DEFAULT_ENCODER_SETTINGS,
+  encoderLiveValues,
+  encoderPinsOk,
+  normalizeEncoderSettings,
+  roundEncoder,
+} from './encoderSource.js';
 import { startPerlinBg } from './perlinBg.js';
 import { AudioClock } from './audioClock.js';
 import {
@@ -91,6 +100,9 @@ let hands = null;
 let soundcardNative = false;
 let soundcardDevices = [];
 let soundcardConnected = false;
+let encoderInfo = { available: false, backend: '', error: '' };
+const encoderById = new Map();
+const encoderPulseTimers = new Map();
 let sourceStudio = null;
 let outCharts = null;
 
@@ -189,6 +201,7 @@ function init() {
   setupHumanUi();
   setupHandsUi();
   setupSoundcardUi();
+  setupEncoderUi();
   setupMidiUi();
   setupGamepadUi();
   oscInMonitor = setupOscInMonitor({
@@ -591,6 +604,7 @@ function onGatewayMessage(msg) {
       oscBridge?.send({ type: 'macbook', enabled: true, ...macbookOptionsFromUi() });
     }
     if (msg.soundcard) applySoundcardHello(msg.soundcard);
+    if (msg.encoder) applyEncoderHello(msg.encoder);
   }
   if (msg.type === 'soundcard-devices') applySoundcardHello(msg);
   if (msg.type === 'soundcard-status') {
@@ -604,6 +618,17 @@ function onGatewayMessage(msg) {
   }
   if (msg.type === 'soundcard-sample') {
     onSoundcardSample(msg);
+  }
+  if (msg.type === 'encoder-status') {
+    onEncoderStatus(msg.id, {
+      connected: !!msg.connected,
+      connecting: !!msg.connecting,
+      error: msg.error || '',
+      backend: msg.backend || encoderInfo.backend,
+    });
+  }
+  if (msg.type === 'encoder-event') {
+    onEncoderEvent(msg);
   }
   if (msg.type === 'macbook-status') {
     macbookUsingNative = !!msg.connected;
@@ -834,6 +859,10 @@ function onSourceRemoved(id) {
   if (!listInstances().some((s) => s.type === 'soundcard')) {
     disconnectSoundcard({ forget: false });
   }
+  if (id && encoderById.has(id)) {
+    oscBridge?.send({ type: 'encoder', id, enabled: false });
+    encoderById.delete(id);
+  }
 }
 
 function setActiveSection(id, { persist = true } = {}) {
@@ -843,7 +872,7 @@ function setActiveSection(id, { persist = true } = {}) {
     el.classList.toggle('active', el.dataset.section === id);
   });
   if (isIn) {
-    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'soundcard', 'time', 'human', 'hands'].forEach((name) => {
+    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'soundcard', 'time', 'human', 'hands', 'encoder'].forEach((name) => {
       $(`#view-${name}`)?.classList.add('hidden');
     });
     $('#view-insource')?.classList.remove('hidden');
@@ -869,6 +898,7 @@ function setActiveSection(id, { persist = true } = {}) {
   if (type === 'mic') requestAnimationFrame(drawMicOscCharts);
   if (type === 'midi') syncMidiView(inst);
   if (type === 'gamepad') syncGamepadView(inst);
+  if (type === 'encoder') syncEncoderView(inst);
 }
 
 function currentInSourceId() {
@@ -2265,6 +2295,413 @@ function onSoundcardSample(sample) {
     'soundcard',
     Object.entries(values).map(([key, v]) => ({ address: `/soundcard/${key}`, args: [Number(v) || 0] })),
   );
+}
+
+function encoderState(id) {
+  if (!encoderById.has(id)) encoderById.set(id, { connected: false, connecting: false, sw: 0 });
+  return encoderById.get(id);
+}
+
+function applyEncoderHello(info) {
+  encoderInfo = {
+    available: !!info?.available,
+    backend: info?.backend || '',
+    error: info?.error || '',
+    gpio: !!info?.gpio,
+  };
+  $('#encoder-warning')?.classList.toggle('hidden', encoderInfo.available);
+  const inst = instanceOfType('encoder');
+  if (inst) syncEncoderView(inst);
+  for (const row of listInstances().filter((s) => s.type === 'encoder')) {
+    if (row.settings?.autoConnect && !encoderState(row.id).connected) connectEncoder(row);
+  }
+}
+
+function encoderSettingsFromUi(inst) {
+  const prev = normalizeEncoderSettings(inst?.settings || DEFAULT_ENCODER_SETTINGS);
+  const countEl = $('#encoder-signal-count');
+  const signalCount = countEl ? Number(countEl.value) : prev.signalCount;
+  const signals = prev.signals.map((sig, i) => {
+    const nameEl = document.querySelector(`[data-enc-name="${i}"]`);
+    const stepsEl = document.querySelector(`[data-enc-steps="${i}"]`);
+    return {
+      name: nameEl ? nameEl.value : sig.name,
+      steps: stepsEl ? Number(stepsEl.value) : sig.steps,
+      value: sig.value,
+    };
+  });
+  return normalizeEncoderSettings({
+    ...prev,
+    clk: $('#encoder-clk') ? Number($('#encoder-clk').value) : prev.clk,
+    dt: $('#encoder-dt') ? Number($('#encoder-dt').value) : prev.dt,
+    sw: $('#encoder-sw') ? Number($('#encoder-sw').value) : prev.sw,
+    invert: !!$('#encoder-invert')?.checked,
+    mode: $('#encoder-mode .active')?.dataset.mode || prev.mode,
+    signalCount,
+    signals,
+  });
+}
+
+function persistEncoderSettings(inst, extra = {}) {
+  if (!inst) return null;
+  const active = instanceOfType('encoder')?.id === inst.id;
+  const settings = {
+    ...(active ? encoderSettingsFromUi(inst) : normalizeEncoderSettings(inst.settings)),
+    ...extra,
+  };
+  return patchInstance(inst.id, { settings: normalizeEncoderSettings(settings) });
+}
+
+function setupEncoderUi() {
+  $('#encoder-connect-btn')?.addEventListener('click', () => connectEncoder());
+  $('#encoder-connect-btn-2')?.addEventListener('click', () => connectEncoder());
+  $('#encoder-disconnect-btn')?.addEventListener('click', () => disconnectEncoder({ forget: true }));
+  $('#encoder-clk')?.addEventListener('change', onEncoderPinsChanged);
+  $('#encoder-dt')?.addEventListener('change', onEncoderPinsChanged);
+  $('#encoder-sw')?.addEventListener('change', onEncoderPinsChanged);
+  $('#encoder-invert')?.addEventListener('change', () => {
+    const inst = persistEncoderSettings(instanceOfType('encoder'));
+    if (inst && encoderState(inst.id).connected) connectEncoder(inst);
+  });
+  $('#encoder-mode')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mode]');
+    if (!btn) return;
+    const inst = instanceOfType('encoder');
+    if (!inst) return;
+    const next = persistEncoderSettings(inst, { mode: btn.dataset.mode });
+    syncEncoderView(next);
+    const view = $('#view-encoder');
+    if (view && !view.classList.contains('hidden')) showSourceSignals(next, view);
+  });
+  $('#encoder-signal-count')?.addEventListener('change', () => {
+    const inst = instanceOfType('encoder');
+    if (!inst) return;
+    const next = persistEncoderSettings(inst);
+    syncEncoderView(next);
+    const view = $('#view-encoder');
+    if (view && !view.classList.contains('hidden')) showSourceSignals(next, view);
+  });
+  $('#encoder-sig-list')?.addEventListener('change', (e) => {
+    const inst = instanceOfType('encoder');
+    if (!inst) return;
+    persistEncoderSettings(inst);
+    const view = $('#view-encoder');
+    if (e.target?.matches('[data-enc-name]') && view && !view.classList.contains('hidden')) {
+      showSourceSignals(getInstance(inst.id), view);
+      paintEncoderLive(getInstance(inst.id));
+    }
+  });
+}
+
+function onEncoderPinsChanged() {
+  const inst = persistEncoderSettings(instanceOfType('encoder'));
+  if (inst && encoderState(inst.id).connected) connectEncoder(inst);
+}
+
+function connectEncoder(target) {
+  const inst = target || instanceOfType('encoder');
+  if (!inst) return;
+  ensureGatewayConnection();
+  const fromUi = instanceOfType('encoder')?.id === inst.id;
+  const settings = fromUi
+    ? persistEncoderSettings(inst)?.settings || normalizeEncoderSettings(inst.settings)
+    : normalizeEncoderSettings(inst.settings);
+  if (!encoderPinsOk(settings)) {
+    onEncoderStatus(inst.id, { connected: false, error: 'CLK, DT, and SW must be three different BCM pins.' });
+    return;
+  }
+  const sent = oscBridge?.send({
+    type: 'encoder',
+    id: inst.id,
+    enabled: true,
+    clk: settings.clk,
+    dt: settings.dt,
+    sw: settings.sw,
+    invert: settings.invert,
+  });
+  if (!sent) {
+    onEncoderStatus(inst.id, { connected: false, error: 'Gateway not connected. Keep the gateway running on the Pi.' });
+    return;
+  }
+  onEncoderStatus(inst.id, { connected: false, connecting: true });
+  patchInstance(inst.id, { settings: { ...settings, autoConnect: true } });
+}
+
+function disconnectEncoder({ forget = false, inst } = {}) {
+  const row = inst || instanceOfType('encoder');
+  if (!row) return;
+  oscBridge?.send({ type: 'encoder', id: row.id, enabled: false });
+  encoderById.set(row.id, { connected: false, connecting: false, sw: 0 });
+  onEncoderStatus(row.id, { connected: false });
+  if (forget) patchInstance(row.id, { settings: { autoConnect: false } });
+}
+
+function onEncoderStatus(id, { connected, connecting, error, backend } = {}) {
+  if (!id) return;
+  const st = encoderState(id);
+  const wasConnected = st.connected;
+  st.connected = !!connected;
+  st.connecting = !!connecting && !connected;
+  const inst = instanceOfType('encoder');
+  const active = inst?.id === id;
+  setSourceDot(id, { connected, connecting });
+  if (connected && !wasConnected) sendEncoderSnapshot(getInstance(id));
+  if (!active) return;
+  $('#encoder-status-dot')?.classList.toggle('connected', !!connected);
+  $('#encoder-status-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  if ($('#encoder-status-text')) {
+    $('#encoder-status-text').textContent = connecting
+      ? 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? backend
+            ? `Live · ${backend}`
+            : 'Live'
+          : 'Disconnected';
+  }
+  if ($('#encoder-connect-btn')) $('#encoder-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#encoder-connect-btn-2')) $('#encoder-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#encoder-disconnect-btn')) $('#encoder-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#encoder-overlay-title')) {
+    $('#encoder-overlay-title').textContent = connecting ? 'Connecting…' : 'No encoder';
+  }
+  if ($('#encoder-error')) $('#encoder-error').textContent = !connected && error ? error : encoderInfo.available ? '' : encoderInfo.error || '';
+  $('#encoder-disconnected')?.classList.toggle('hidden', !!connected || !!connecting);
+  $('#encoder-live')?.classList.toggle('hidden', !connected && !connecting);
+}
+
+function onEncoderEvent(msg) {
+  const inst = getInstance(msg.id) || listInstances().find((s) => s.type === 'encoder' && s.id === msg.id);
+  if (!inst) return;
+  if (!encoderState(inst.id).connected) {
+    onEncoderStatus(inst.id, { connected: true, backend: encoderInfo.backend });
+  }
+  const kind = msg.kind;
+  if (kind === 'cw' || kind === 'ccw') {
+    applyEncoderRotation(inst, kind === 'cw' ? 1 : -1);
+    return;
+  }
+  if (kind === 'sw') {
+    applyEncoderPress(inst);
+    return;
+  }
+  if (kind === 'sw-up') {
+    const row = getInstance(inst.id);
+    const st = encoderState(inst.id);
+    st.sw = 0;
+    if (normalizeEncoderSettings(row?.settings).mode === 'raw') {
+      pulseEncoderTrigger(row, 'sw', 0);
+    } else {
+      sendEncoderMessages(row, [{ address: '/encoder/sw', args: [0] }]);
+    }
+    paintEncoderLive(row);
+  }
+}
+
+function applyEncoderRotation(inst, dir) {
+  const current = getInstance(inst.id) || inst;
+  const result = applyEncoderTurn(current.settings, dir);
+  const next = patchInstance(inst.id, { settings: result.settings });
+  if (result.kind === 'cw' || result.kind === 'ccw') {
+    pulseEncoderTrigger(next, result.kind, 1);
+    flashEncoderPad(result.kind);
+    paintEncoderLive(next);
+    return;
+  }
+  const i = result.index + 1;
+  sendEncoderMessages(next, [
+    { address: `/encoder/sig/${i}`, args: [roundEncoder(result.value)] },
+    { address: '/encoder/value', args: [roundEncoder(result.value)] },
+  ]);
+  paintEncoderLive(next);
+}
+
+function applyEncoderPress(inst) {
+  const current = getInstance(inst.id) || inst;
+  const result = applyEncoderSwitch(current.settings);
+  const next = patchInstance(inst.id, { settings: result.settings });
+  const st = encoderState(inst.id);
+  st.sw = 1;
+  flashEncoderPad('sw');
+  if (result.kind === 'sw') {
+    pulseEncoderTrigger(next, 'sw', 1);
+    paintEncoderLive(next);
+    return;
+  }
+  const i = result.index + 1;
+  sendEncoderMessages(
+    next,
+    [
+      { address: '/encoder/index', args: [i] },
+      { address: '/encoder/name', args: [result.name] },
+      { address: '/encoder/value', args: [roundEncoder(result.value)] },
+      { address: '/encoder/sw', args: [1] },
+    ],
+    { force: true },
+  );
+  paintEncoderLive(next);
+  const view = $('#view-encoder');
+  if (view && !view.classList.contains('hidden') && instanceOfType('encoder')?.id === next.id) {
+    highlightEncoderSelection(next);
+  }
+}
+
+function sendEncoderSnapshot(inst) {
+  if (!inst) return;
+  const s = normalizeEncoderSettings(inst.settings);
+  if (s.mode === 'raw') {
+    sendEncoderMessages(inst, [
+      { address: '/encoder/cw', args: [0] },
+      { address: '/encoder/ccw', args: [0] },
+      { address: '/encoder/sw', args: [0] },
+    ]);
+    return;
+  }
+  const cur = s.signals[s.selected];
+  const messages = s.signals.map((sig, i) => ({
+    address: `/encoder/sig/${i + 1}`,
+    args: [roundEncoder(sig.value)],
+  }));
+  messages.push({ address: '/encoder/index', args: [s.selected + 1] });
+  messages.push({ address: '/encoder/name', args: [cur?.name || ''] });
+  messages.push({ address: '/encoder/value', args: [roundEncoder(cur?.value || 0)] });
+  sendEncoderMessages(inst, messages, { force: true });
+}
+
+function sendEncoderMessages(inst, messages, { force = false } = {}) {
+  if (!inst || !messages?.length) return;
+  const out = messages.map((m) => ({ ...m, address: rewriteAddress(inst, m.address) }));
+  const { sent } = processOutgoing(inst, out);
+  outCharts?.push(inst.id, out);
+  oscBridge?.sendMessages(sent, { force, source: inst.id, processed: true });
+}
+
+function pulseEncoderTrigger(inst, key, value) {
+  if (!inst) return;
+  sendTriggerInst(inst, `/encoder/${key}`, value);
+  fillSourceSignals({ [key]: value }, inst);
+  if (value !== 1) return;
+  const tkey = `${inst.id}:${key}`;
+  clearTimeout(encoderPulseTimers.get(tkey));
+  encoderPulseTimers.set(
+    tkey,
+    setTimeout(() => {
+      const row = getInstance(inst.id);
+      if (!row) return;
+      if (key === 'sw' && encoderState(inst.id).sw) return;
+      sendTriggerInst(row, `/encoder/${key}`, 0);
+      fillSourceSignals({ [key]: 0 }, row);
+    }, 40),
+  );
+}
+
+function flashEncoderPad(key) {
+  const pad = document.querySelector(`#encoder-pads [data-enc="${key}"]`);
+  if (!pad) return;
+  pad.classList.remove('flash');
+  void pad.offsetWidth;
+  pad.classList.add('flash');
+  setTimeout(() => pad.classList.remove('flash'), 120);
+}
+
+function syncEncoderView(inst) {
+  if (!inst || inst.type !== 'encoder') return;
+  const s = normalizeEncoderSettings(inst.settings);
+  if ($('#encoder-clk')) $('#encoder-clk').value = String(s.clk);
+  if ($('#encoder-dt')) $('#encoder-dt').value = String(s.dt);
+  if ($('#encoder-sw')) $('#encoder-sw').value = String(s.sw);
+  if ($('#encoder-invert')) $('#encoder-invert').checked = !!s.invert;
+  $('#encoder-mode')?.querySelectorAll('[data-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === s.mode);
+  });
+  if ($('#encoder-signal-count')) $('#encoder-signal-count').value = String(s.signalCount);
+  $('#encoder-selector-settings')?.classList.toggle('hidden', s.mode !== 'modeselector');
+  $('#encoder-pads')?.classList.toggle('hidden', s.mode === 'modeselector');
+  $('#encoder-meters')?.classList.toggle('hidden', s.mode !== 'modeselector');
+  renderEncoderSignalEditors(s);
+  renderEncoderMeters(s);
+  const st = encoderState(inst.id);
+  onEncoderStatus(inst.id, {
+    connected: st.connected,
+    connecting: st.connecting,
+    error: encoderInfo.available ? '' : encoderInfo.error,
+    backend: encoderInfo.backend,
+  });
+  paintEncoderLive(inst);
+}
+
+function renderEncoderSignalEditors(s) {
+  const host = $('#encoder-sig-list');
+  if (!host) return;
+  host.innerHTML = s.signals
+    .map(
+      (sig, i) => `<div class="encoder-sig-row ${i === s.selected ? 'is-selected' : ''}" data-enc-row="${i}">
+        <span class="encoder-sig-idx">${i + 1}</span>
+        <input class="text-input" data-enc-name="${i}" type="text" maxlength="32" value="${escapeAttr(sig.name)}" />
+        <input class="text-input" data-enc-steps="${i}" type="number" min="1" max="10000" step="1" value="${sig.steps}" title="Steps (0–1)" />
+      </div>`,
+    )
+    .join('');
+}
+
+function renderEncoderMeters(s) {
+  const host = $('#encoder-meters');
+  if (!host) return;
+  host.innerHTML = s.signals
+    .map(
+      (sig, i) => `<div class="encoder-meter ${i === s.selected ? 'is-selected' : ''}" data-enc-meter="${i}">
+        <span>${escapeHtml(sig.name)}</span>
+        <div class="encoder-meter-bar"><i style="width:${(sig.value * 100).toFixed(1)}%"></i></div>
+        <span class="soundcard-meter-val">${roundEncoder(sig.value).toFixed(3)}</span>
+      </div>`,
+    )
+    .join('');
+}
+
+function highlightEncoderSelection(inst) {
+  const s = normalizeEncoderSettings(inst?.settings);
+  $('#encoder-sig-list')?.querySelectorAll('[data-enc-row]').forEach((row) => {
+    row.classList.toggle('is-selected', Number(row.dataset.encRow) === s.selected);
+  });
+  $('#encoder-meters')?.querySelectorAll('[data-enc-meter]').forEach((row) => {
+    row.classList.toggle('is-selected', Number(row.dataset.encMeter) === s.selected);
+  });
+}
+
+function paintEncoderLive(inst) {
+  if (!inst) return;
+  const s = normalizeEncoderSettings(inst.settings);
+  const st = encoderState(inst.id);
+  const active = instanceOfType('encoder')?.id === inst.id;
+  const values = encoderLiveValues(s);
+  values.sw = st.sw ? 1 : 0;
+  if (s.mode === 'modeselector') {
+    const cur = s.signals[s.selected];
+    if (active && $('#encoder-hero-value')) $('#encoder-hero-value').textContent = cur?.name || '—';
+    if (active && $('#encoder-hero-unit')) {
+      $('#encoder-hero-unit').textContent = `${s.selected + 1}/${s.signals.length} · ${roundEncoder(cur?.value || 0).toFixed(3)}`;
+    }
+    if (active) {
+      s.signals.forEach((sig, i) => {
+        const row = document.querySelector(`[data-enc-meter="${i}"]`);
+        if (!row) return;
+        const bar = row.querySelector('i');
+        const val = row.querySelector('.soundcard-meter-val');
+        const label = row.querySelector('span');
+        if (bar) bar.style.width = `${(sig.value * 100).toFixed(1)}%`;
+        if (val) val.textContent = roundEncoder(sig.value).toFixed(3);
+        if (label) label.textContent = sig.name;
+        row.classList.toggle('is-selected', i === s.selected);
+      });
+      highlightEncoderSelection(inst);
+    }
+  } else if (active) {
+    if ($('#encoder-hero-value')) $('#encoder-hero-value').textContent = st.sw ? 'SW' : 'RAW';
+    if ($('#encoder-hero-unit')) $('#encoder-hero-unit').textContent = `CLK ${s.clk} · DT ${s.dt} · SW ${s.sw}`;
+    document.querySelector('#encoder-pads [data-enc="sw"]')?.classList.toggle('held', !!st.sw);
+  }
+  if (active) fillSourceSignals(values, inst);
 }
 
 function onMicSample({ level, peak, name }) {

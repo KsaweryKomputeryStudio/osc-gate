@@ -186,6 +186,10 @@ export class OscBridge {
         this.onGateway(msg);
         return;
       }
+      if (msg.type === 'encoder-event' || msg.type === 'encoder-status') {
+        this.onGateway(msg);
+        return;
+      }
 
       if (msg.type === 'osc') {
         this.stats.recvMessages++;

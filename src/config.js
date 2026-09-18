@@ -46,6 +46,7 @@ export const DEFAULT_CONFIG = {
       time: true,
       human: true,
       hands: true,
+      encoder: true,
     },
   },
   signals: {

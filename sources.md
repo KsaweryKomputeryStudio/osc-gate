@@ -2,7 +2,7 @@
 
 Living inventory. Research notes stay in `sources_v1.md` and `sources_v2.md`.
 
-- **Implemented** — everything in the picker today (67 types + incoming OSC passthrough).
+- **Implemented** — everything in the picker today (68 types + incoming OSC passthrough).
 - **Todo** — leftover from v1 plus new v2 feeds, duplicates merged, dead ends parked.
 
 ---
@@ -24,6 +24,12 @@ Addresses use instance slots: `/prefix/1/…`, `/prefix/2/…`.
 | Soundcard | `soundcard` | `/soundcard` | Gateway multi-channel I/O (beta) |
 | Human count | `human` | `/human` | Webcam + YOLOv8n |
 | Hands | `hands` | `/hands` | MediaPipe left/right landmarks + gestures |
+
+### Raspberry (view)
+
+| Source | Type | OSC | Notes |
+| --- | --- | --- | --- |
+| Encoder | `encoder` | `/encoder` | Pi GPIO CLK/DT/SW. RAW triggers or MODESELECTOR named 0–1 levels |
 
 ### Time (view)
 

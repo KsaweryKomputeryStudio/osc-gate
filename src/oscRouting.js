@@ -13,6 +13,7 @@ export const OSC_SOURCES = [
   { id: 'time', label: 'Time', prefix: '/time' },
   { id: 'human', label: 'Human count', prefix: '/human' },
   { id: 'hands', label: 'Hands', prefix: '/hands' },
+  { id: 'encoder', label: 'Encoder', prefix: '/encoder' },
 ];
 
 export function newDestId() {

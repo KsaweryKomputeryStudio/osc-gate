@@ -13,6 +13,7 @@ MacBook  ──WebHID/sensors──▶┼─ Browser ──WebSocket──▶ OS
 Weather ──Open-Meteo──────▶┤         ◀───────────── OSC Gateway ◀──UDP── your app
 Microphone ──Web Audio────▶┤
 Soundcard ──gateway I/O───▶┤
+Encoder ──Pi GPIO─────────▶┤
 Time ──local clock────────▶┤
 Human ──YOLO + camera─────▶┤
 Hands ──MediaPipe─────────▶┘
@@ -26,7 +27,7 @@ Hands ──MediaPipe─────────▶┘
 
 Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, `hands` `/hands`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
 
-Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/hands`, `/soundcard`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/hands`, `/soundcard`, `/encoder`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
 
 Each source **instance** in a session gets a numeric id: `/weather/1/temp`, `/weather/2/temp`. Sessions are saved/opened as JSON; the last session is restored on startup.
 
@@ -245,6 +246,35 @@ Multi-channel audio **in the local gateway** (RtAudio / CoreAudio), not the brow
 
 ---
 
+## Encoder — `/encoder` (Raspberry Pi)
+
+Rotary encoder + switch on **BCM GPIO**, read by the local gateway (`pinctrl` on Raspberry Pi OS, or optional `onoff`). Run the gateway on the Pi. Per instance: `/encoder/1/…`. Pins and behaviour are set in the source view.
+
+### RAW
+
+Switch and each rotation direction are triggers (1 then 0).
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/encoder/cw` | f | Clockwise detent |
+| `/encoder/ccw` | f | Counter-clockwise detent |
+| `/encoder/sw` | f | Switch (1 while held / pulse on click) |
+
+### MODESELECTOR
+
+Switch cycles the selected named signal and sends that name. Rotation steps the current signal’s 0–1 level. Step count is per signal (100 steps ⇒ 0.01 per click).
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/encoder/sig/1` | f | Signal 1 level 0–1 |
+| `/encoder/sig/N` | f | Signal N level 0–1 |
+| `/encoder/index` | f | Selected signal (1-based) |
+| `/encoder/name` | s | Selected signal name (sent on switch) |
+| `/encoder/value` | f | Current selected level 0–1 |
+| `/encoder/sw` | f | Switch 1/0 |
+
+---
+
 ## Inbound (your app → gateway `:9001` → controller)
 
 Send OSC UDP to the gateway **in** port (default **9001**, set in OSC Configuration). Values are floats `0..1` unless noted.
@@ -319,7 +349,7 @@ The bottom **Incoming OSC** dock shows these packets (raw log or compact per-add
 
 ### Example: TouchDesigner / Max / Resolume
 
-- Listen UDP **57121** for `/ds/...`, `/garmin/...`, `/weather/...`, `/mic/...`, `/soundcard/...`, `/time/...`, `/human/...`, `/hands/...`
+- Listen UDP **57121** for `/ds/...`, `/garmin/...`, `/weather/...`, `/mic/...`, `/soundcard/...`, `/encoder/...`, `/time/...`, `/human/...`, `/hands/...`
 - Send UDP **9001** e.g. `/ds/rumble 0.5 0.2`
 
 ### Example: Python (python-osc)

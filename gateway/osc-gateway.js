@@ -20,6 +20,7 @@ import osc from 'osc';
 import dgram from 'node:dgram';
 import { MacbookLidPoller, probeLidSensor } from './macbookLid.js';
 import { SoundcardCapture, probeSoundcard } from './soundcard.js';
+import { EncoderHub, probeEncoder } from './encoder.js';
 import { argValue, asNumber, normalizeSpec, observeRange, transformArgs } from '../src/oscInScale.js';
 
 const OSC_OUT_HOST = process.env.OSC_OUT_HOST || '127.0.0.1';
@@ -71,6 +72,25 @@ if (soundcardInfo.native) {
   console.log(`[soundcard] ${soundcardInfo.devices.length} input device(s)`);
 } else {
   console.log(`[soundcard] unavailable: ${soundcardInfo.error || 'audify missing'}`);
+}
+
+let encoderInfo = probeEncoder();
+const encoders = new EncoderHub({
+  onEvent: (event) => {
+    if (browserClient && browserClient.readyState === 1) {
+      browserClient.send(JSON.stringify({ type: 'encoder-event', ...event }));
+    }
+  },
+  onStatus: (status) => {
+    if (browserClient && browserClient.readyState === 1) {
+      browserClient.send(JSON.stringify({ type: 'encoder-status', ...status }));
+    }
+  },
+});
+if (encoderInfo.available) {
+  console.log(`[encoder] GPIO ready (${encoderInfo.backend})`);
+} else {
+  console.log(`[encoder] unavailable: ${encoderInfo.error || 'no GPIO'}`);
 }
 
 let destinations = [{ id: 'default', host: OSC_OUT_HOST, port: OSC_OUT_PORT, name: 'Primary' }];
@@ -358,6 +378,7 @@ wss.on('connection', (ws) => {
       discrete: OSC_DISCRETE,
       macbook: macbookInfo,
       soundcard: soundcardInfo,
+      encoder: encoderInfo,
     }),
   );
 
@@ -456,6 +477,26 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (msg.type === 'encoder') {
+      const id = String(msg.id || '');
+      if (!msg.enabled) {
+        encoders.stop(id);
+        return;
+      }
+      encoderInfo = probeEncoder();
+      encoders.start(id, msg).catch((err) => {
+        ws.send(
+          JSON.stringify({
+            type: 'encoder-status',
+            id,
+            connected: false,
+            error: err.message,
+          }),
+        );
+      });
+      return;
+    }
+
     if (msg.type === 'macbook') {
       macbookLid.setOptions({
         closedDeg: msg.closedDeg,
@@ -492,6 +533,7 @@ wss.on('connection', (ws) => {
     if (browserClient === ws) {
       browserClient = null;
       soundcard.stop();
+      encoders.stopAll();
     }
   });
 });
@@ -510,6 +552,7 @@ setInterval(() => {
 process.on('SIGINT', () => {
   macbookLid.stop();
   soundcard.stop();
+  encoders.stopAll();
   try {
     udpIn?.close();
   } catch {
