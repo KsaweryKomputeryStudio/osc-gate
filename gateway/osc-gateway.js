@@ -19,6 +19,7 @@ import { WebSocketServer } from 'ws';
 import osc from 'osc';
 import dgram from 'node:dgram';
 import { MacbookLidPoller, probeLidSensor } from './macbookLid.js';
+import { SoundcardCapture, probeSoundcard } from './soundcard.js';
 import { argValue, asNumber, normalizeSpec, observeRange, transformArgs } from '../src/oscInScale.js';
 
 const OSC_OUT_HOST = process.env.OSC_OUT_HOST || '127.0.0.1';
@@ -52,6 +53,25 @@ probeLidSensor()
     else console.log(`[mac] native lid reader unavailable: ${info.error || 'node-hid missing'}`);
   })
   .catch(() => {});
+
+let soundcardInfo = probeSoundcard();
+const soundcard = new SoundcardCapture({
+  onSample: (sample) => {
+    if (browserClient && browserClient.readyState === 1) {
+      browserClient.send(JSON.stringify({ type: 'soundcard-sample', ...sample }));
+    }
+  },
+  onStatus: (status) => {
+    if (browserClient && browserClient.readyState === 1) {
+      browserClient.send(JSON.stringify({ type: 'soundcard-status', ...status }));
+    }
+  },
+});
+if (soundcardInfo.native) {
+  console.log(`[soundcard] ${soundcardInfo.devices.length} input device(s)`);
+} else {
+  console.log(`[soundcard] unavailable: ${soundcardInfo.error || 'audify missing'}`);
+}
 
 let destinations = [{ id: 'default', host: OSC_OUT_HOST, port: OSC_OUT_PORT, name: 'Primary' }];
 let routing = {};
@@ -317,6 +337,18 @@ wss.on('connection', (ws) => {
   console.log('[WS] browser connected');
   browserClient = ws;
 
+  try {
+    const devices = soundcard.listDevices();
+    soundcardInfo = {
+      native: true,
+      available: devices.length > 0,
+      devices,
+      defaultId: soundcardInfo.defaultId || devices.find((d) => d.defaultInput)?.id || devices[0]?.id || '',
+    };
+  } catch (err) {
+    soundcardInfo = { native: false, available: false, devices: [], error: err.message };
+  }
+
   ws.send(
     JSON.stringify({
       type: 'hello',
@@ -325,6 +357,7 @@ wss.on('connection', (ws) => {
       wsPort: WS_PORT,
       discrete: OSC_DISCRETE,
       macbook: macbookInfo,
+      soundcard: soundcardInfo,
     }),
   );
 
@@ -388,6 +421,41 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (msg.type === 'soundcard') {
+      if (msg.list) {
+        try {
+          soundcardInfo = {
+            native: true,
+            available: true,
+            devices: soundcard.listDevices(),
+            defaultId: soundcardInfo.defaultId || '',
+          };
+        } catch (err) {
+          soundcardInfo = { native: false, available: false, devices: [], error: err.message };
+        }
+        ws.send(JSON.stringify({ type: 'soundcard-devices', ...soundcardInfo }));
+        return;
+      }
+      soundcard.setOptions({
+        sensitivity: msg.sensitivity,
+        smoothing: msg.smoothing,
+      });
+      if (msg.enabled) {
+        soundcard.start({ deviceId: msg.deviceId, channels: msg.channels }).catch((err) => {
+          ws.send(
+            JSON.stringify({
+              type: 'soundcard-status',
+              connected: false,
+              error: err.message,
+            }),
+          );
+        });
+      } else {
+        soundcard.stop();
+      }
+      return;
+    }
+
     if (msg.type === 'macbook') {
       macbookLid.setOptions({
         closedDeg: msg.closedDeg,
@@ -421,7 +489,10 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('[WS] browser disconnected');
-    if (browserClient === ws) browserClient = null;
+    if (browserClient === ws) {
+      browserClient = null;
+      soundcard.stop();
+    }
   });
 });
 
@@ -438,6 +509,7 @@ setInterval(() => {
 
 process.on('SIGINT', () => {
   macbookLid.stop();
+  soundcard.stop();
   try {
     udpIn?.close();
   } catch {

@@ -53,6 +53,26 @@ export function trendToOsc(deltaBpm, rangeBpm, { quantize = 3 } = {}) {
   return Math.round(v * p) / p;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export class GarminHrSource {
   constructor({ onSample, onBeat, onStatus } = {}) {
     this.onSample = onSample || (() => {});
@@ -75,6 +95,10 @@ export class GarminHrSource {
     this.sendBeats = true;
 
     this._wantConnect = false;
+    this._chooserOpen = false;
+    this._attachGen = 0;
+    this._lastAttachAt = 0;
+    this._lastError = '';
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._reconnectInFlight = false;
@@ -90,12 +114,17 @@ export class GarminHrSource {
     this._onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       if (!this._wantConnect || this.connected) return;
-      this._clearReconnect();
-      this._tryReconnect();
+      this._watchAdvertisements();
+      this._scheduleReconnect(800);
+    };
+    this._onGesture = () => {
+      if (!this._wantConnect || this.connected || this._watchingAds) return;
+      this._watchAdvertisements();
     };
 
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this._onVisible);
+      document.addEventListener('pointerdown', this._onGesture);
     }
   }
 
@@ -179,11 +208,31 @@ export class GarminHrSource {
     if (!GarminHrSource.isSupported()) {
       throw new Error('Web Bluetooth is not available in this browser.');
     }
+    if (this._chooserOpen) return this.device;
+
+    // Cancel background GATT so the chooser is not racing a half-open link.
     this._wantConnect = true;
+    this._chooserOpen = true;
+    this._attachGen += 1;
+    this._clearReconnect();
+    this._lastError = '';
     try {
+      this.device?.gatt?.disconnect();
+    } catch {
+      // ignore
+    }
+    this.onStatus({
+      connected: false,
+      connecting: true,
+      chooserOpen: true,
+      name: this.device?.name || 'Garmin HR',
+    });
+
+    try {
+      // Must stay in the same user-gesture turn as the click.
       const device = await navigator.bluetooth.requestDevice({
         filters: [{ services: ['heart_rate'] }],
-        optionalServices: ['battery_service'],
+        optionalServices: ['heart_rate', 'battery_service'],
       });
       await this._attach(device);
       return device;
@@ -191,29 +240,42 @@ export class GarminHrSource {
       if (err?.name === 'NotFoundError' || err?.name === 'NotAllowedError') {
         this._wantConnect = false;
         this._clearReconnect();
-        this.onStatus({ connected: false });
+        this._lastError = '';
+        this.onStatus({ connected: false, chooserOpen: false });
       } else {
-        this._scheduleReconnect();
+        this._lastError = err?.message || 'Connect failed';
+        this._chooserOpen = false;
+        this.onStatus({
+          connected: false,
+          reconnecting: true,
+          error: this._lastError,
+          name: this.device?.name || 'Garmin HR',
+        });
+        this._scheduleReconnect(2000);
       }
       throw err;
+    } finally {
+      this._chooserOpen = false;
     }
   }
 
   async reconnect(deviceId) {
     this._wantConnect = true;
+    this._lastError = '';
     this.onStatus({ connected: false, connecting: true, reconnecting: true });
     const device = await this._findPermittedDevice(deviceId || this.lastDeviceId);
     if (!device) {
-      this._scheduleReconnect();
+      this._lastError = 'No remembered watch — click Connect';
+      this.onStatus({ connected: false, error: this._lastError });
       return false;
     }
-    try {
-      await this._attach(device);
-      return true;
-    } catch {
-      this._scheduleReconnect();
-      return false;
-    }
+    this.device = device;
+    this.lastDeviceId = device.id;
+    this.device.removeEventListener('gattserverdisconnected', this._onDisconnected);
+    this.device.addEventListener('gattserverdisconnected', this._onDisconnected);
+    await this._watchAdvertisements();
+    this._scheduleReconnect(1200);
+    return false;
   }
 
   async _findPermittedDevice(deviceId) {
@@ -228,10 +290,11 @@ export class GarminHrSource {
 
   async disconnect() {
     this._wantConnect = false;
+    this._attachGen += 1;
     this._clearReconnect();
     this._unwatchAdvertisements();
     this._stopBeatClock();
-    this._teardownCharacteristic();
+    await this._teardownCharacteristic();
     if (this.device) {
       this.device.removeEventListener('gattserverdisconnected', this._onDisconnected);
       try {
@@ -247,12 +310,43 @@ export class GarminHrSource {
     this.samples = [];
     this._smoothedTrend = 0.5;
     this._trendStepAt = 0;
+    this._lastError = '';
     this.onStatus({ connected: false });
   }
 
+  async _connectGatt(device) {
+    if (device.gatt.connected) {
+      try {
+        device.gatt.disconnect();
+      } catch {
+        // ignore
+      }
+      await delay(350);
+    }
+    try {
+      return await withTimeout(
+        device.gatt.connect(),
+        10000,
+        'Watch did not accept Bluetooth (timeout). Toggle Broadcast Heart Rate, then Connect again.',
+      );
+    } catch (err) {
+      try {
+        device.gatt.disconnect();
+      } catch {
+        // ignore
+      }
+      throw err;
+    }
+  }
+
   async _attach(device) {
+    const gen = ++this._attachGen;
+    this._lastAttachAt = performance.now();
     this._wantConnect = true;
     this._clearReconnect();
+
+    await this._teardownCharacteristic();
+    if (gen !== this._attachGen) return;
 
     if (this.device && this.device !== device) {
       this.device.removeEventListener('gattserverdisconnected', this._onDisconnected);
@@ -275,24 +369,35 @@ export class GarminHrSource {
       name: device.name || 'Garmin HR',
     });
 
-    this._server = device.gatt.connected ? device.gatt : await device.gatt.connect();
+    this._server = await this._connectGatt(device);
+    if (gen !== this._attachGen || !this._wantConnect) {
+      try {
+        device.gatt?.disconnect();
+      } catch {
+        // cancelled
+      }
+      return;
+    }
+
     const service = await this._server.getPrimaryService(HEART_RATE_SERVICE);
-    this._teardownCharacteristic();
+    if (gen !== this._attachGen) return;
     this._characteristic = await service.getCharacteristic(HEART_RATE_MEASUREMENT);
     this._characteristic.addEventListener('characteristicvaluechanged', this._onValue);
     await this._characteristic.startNotifications();
 
-    this._unwatchAdvertisements();
-    this._reconnectAttempt = 0;
-    if (!this._wantConnect) {
+    if (gen !== this._attachGen || !this._wantConnect) {
+      await this._teardownCharacteristic();
       try {
         device.gatt?.disconnect();
       } catch {
-        // user cancelled while connecting
+        // cancelled
       }
-      this.connected = false;
       return;
     }
+
+    this._unwatchAdvertisements();
+    this._reconnectAttempt = 0;
+    this._lastError = '';
     this.connected = true;
     this.onStatus({
       connected: true,
@@ -304,7 +409,7 @@ export class GarminHrSource {
 
   _handleDisconnected() {
     this._stopBeatClock();
-    this._teardownCharacteristic();
+    void this._teardownCharacteristic();
     this._server = null;
     this.connected = false;
     this.hr = null;
@@ -318,6 +423,8 @@ export class GarminHrSource {
       return;
     }
 
+    if (this._chooserOpen) return;
+
     this.onStatus({
       connected: false,
       connecting: true,
@@ -326,15 +433,15 @@ export class GarminHrSource {
       id: this.device?.id,
     });
     this._watchAdvertisements();
-    this._scheduleReconnect(400);
+    this._scheduleReconnect(1600);
   }
 
   _scheduleReconnect(ms) {
-    if (!this._wantConnect || this.connected) return;
+    if (!this._wantConnect || this.connected || this._chooserOpen) return;
     this._clearReconnect();
-    const delay = ms ?? Math.min(12000, 400 * 2 ** Math.min(this._reconnectAttempt, 5));
+    const wait = ms ?? Math.min(15000, 1500 * 2 ** Math.min(this._reconnectAttempt, 4));
     this._reconnectAttempt += 1;
-    this._reconnectTimer = setTimeout(() => this._tryReconnect(), delay);
+    this._reconnectTimer = setTimeout(() => this._tryReconnect(), wait);
   }
 
   _clearReconnect() {
@@ -345,7 +452,11 @@ export class GarminHrSource {
   }
 
   async _tryReconnect() {
-    if (!this._wantConnect || this.connected || this._reconnectInFlight) return;
+    if (!this._wantConnect || this.connected || this._reconnectInFlight || this._chooserOpen) return;
+    if (performance.now() - this._lastAttachAt < 1500) {
+      this._scheduleReconnect(1500);
+      return;
+    }
     this._reconnectInFlight = true;
     try {
       let device = this.device;
@@ -358,23 +469,31 @@ export class GarminHrSource {
         name: device.name || 'Garmin HR',
       });
       await this._attach(device);
-    } catch {
-      // retry below
+    } catch (err) {
+      this._lastError = err?.message || 'Reconnect failed';
+      this.onStatus({
+        connected: false,
+        reconnecting: true,
+        error: this._lastError,
+        name: this.device?.name || 'Garmin HR',
+      });
     } finally {
       this._reconnectInFlight = false;
     }
-    if (this._wantConnect && !this.connected) this._scheduleReconnect();
+    if (this._wantConnect && !this.connected && !this._chooserOpen) this._scheduleReconnect();
   }
 
   async _watchAdvertisements() {
-    if (this._watchingAds || !this.device?.watchAdvertisements) return;
+    if (this._watchingAds || !this.device?.watchAdvertisements) return false;
     try {
       this.device.removeEventListener('advertisementreceived', this._onAdvert);
       this.device.addEventListener('advertisementreceived', this._onAdvert);
       await this.device.watchAdvertisements();
       this._watchingAds = true;
+      return true;
     } catch {
       this._watchingAds = false;
+      return false;
     }
   }
 
@@ -391,21 +510,22 @@ export class GarminHrSource {
   }
 
   _onAdvertisement() {
-    if (!this._wantConnect || this.connected || this._reconnectInFlight) return;
-    this._reconnectAttempt = 0;
+    if (!this._wantConnect || this.connected || this._reconnectInFlight || this._chooserOpen) return;
+    if (performance.now() - this._lastAttachAt < 2000) return;
     this._clearReconnect();
     this._tryReconnect();
   }
 
-  _teardownCharacteristic() {
-    if (!this._characteristic) return;
-    this._characteristic.removeEventListener('characteristicvaluechanged', this._onValue);
-    try {
-      this._characteristic.stopNotifications();
-    } catch {
-      // ignore
-    }
+  async _teardownCharacteristic() {
+    const ch = this._characteristic;
     this._characteristic = null;
+    if (!ch) return;
+    ch.removeEventListener('characteristicvaluechanged', this._onValue);
+    try {
+      await ch.stopNotifications();
+    } catch {
+      // already gone
+    }
   }
 
   _handleValue(event) {

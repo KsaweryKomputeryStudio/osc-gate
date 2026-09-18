@@ -12,8 +12,10 @@ Garmin HR ──Web Bluetooth──▶┤
 MacBook  ──WebHID/sensors──▶┼─ Browser ──WebSocket──▶ OSC Gateway ──UDP──▶ your app
 Weather ──Open-Meteo──────▶┤         ◀───────────── OSC Gateway ◀──UDP── your app
 Microphone ──Web Audio────▶┤
+Soundcard ──gateway I/O───▶┤
 Time ──local clock────────▶┤
-Human ──YOLO + camera─────▶┘
+Human ──YOLO + camera─────▶┤
+Hands ──MediaPipe─────────▶┘
 ```
 
 | Role | Default | Env |
@@ -22,9 +24,9 @@ Human ──YOLO + camera─────▶┘
 | OSC receive (world → browser) | `0.0.0.0:9001` (configurable in UI) | `OSC_IN_PORT` (until UI connects) |
 | WebSocket bridge | `ws://127.0.0.1:8081` | `WS_PORT` |
 
-Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
+Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, `hands` `/hands`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
 
-Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
+Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/hands`, `/soundcard`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
 
 Each source **instance** in a session gets a numeric id: `/weather/1/temp`, `/weather/2/temp`. Sessions are saved/opened as JSON; the last session is restored on startup.
 
@@ -199,6 +201,50 @@ Webcam + **YOLOv8n** (COCO person class) in the browser via ONNX Runtime. First 
 
 ---
 
+## Hands — `/hands`
+
+Webcam + **MediaPipe Gesture Recognizer** (21 landmarks + canned gestures). Addresses are per instance (`/hands/1/…`). Palm `x`/`y` are **0–1** in the preview (`x` 0 = left of frame, mirrored by default; `y` 0 = top). Fingertip `x`/`y` are the same unless **Fingers relative to hand** is on: then `0.5` is the palm, `y` above 0.5 is toward the fingertips, `x` above 0.5 is to the preview-right of that hand. Missing hands send `0`.
+
+Left and right are the person’s hands (MediaPipe handedness), not the side of the screen.
+
+Replace `left` with `right` for the other hand.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/hands/left/present` | f | `1` if that hand is tracked |
+| `/hands/left/score` | f | Hand presence confidence 0–1 |
+| `/hands/left/x` | f | Palm X in frame |
+| `/hands/left/y` | f | Palm Y in frame |
+| `/hands/left/pinch` | f | Thumb–index pinch (1 = closed) |
+| `/hands/left/grab` | f | Finger curl / fist (1 = closed) |
+| `/hands/left/spread` | f | Index–pinky spread (1 = wide) |
+| `/hands/left/thumb/x` `/y` | f | Thumb tip (frame, or relative to palm if that option is on) |
+| `/hands/left/index/x` `/y` | f | Index tip |
+| `/hands/left/middle/x` `/y` | f | Middle tip |
+| `/hands/left/ring/x` `/y` | f | Ring tip |
+| `/hands/left/pinky/x` `/y` | f | Pinky tip |
+| `/hands/left/gesture/fist` | f | Closed fist score |
+| `/hands/left/gesture/open` | f | Open palm score |
+| `/hands/left/gesture/point` | f | Pointing up score |
+| `/hands/left/gesture/thumb_up` | f | Thumb up score |
+| `/hands/left/gesture/thumb_down` | f | Thumb down score |
+| `/hands/left/gesture/victory` | f | Victory / peace score |
+| `/hands/left/gesture/love` | f | I-love-you score |
+
+---
+
+## Soundcard — `/soundcard` (beta)
+
+Multi-channel audio **in the local gateway** (RtAudio / CoreAudio), not the browser. Per instance: `/soundcard/1/…`. Channel count is limited by the device (UI default 8, max 16). Values are 0–1.
+
+| Address | Args | Meaning |
+|---------|------|---------|
+| `/soundcard/ch/1` | f | Channel 1 RMS level |
+| `/soundcard/ch/1/peak` | f | Channel 1 peak hold |
+| `/soundcard/ch/N` | f | Same for channels 2…N |
+
+---
+
 ## Inbound (your app → gateway `:9001` → controller)
 
 Send OSC UDP to the gateway **in** port (default **9001**, set in OSC Configuration). Values are floats `0..1` unless noted.
@@ -273,7 +319,7 @@ The bottom **Incoming OSC** dock shows these packets (raw log or compact per-add
 
 ### Example: TouchDesigner / Max / Resolume
 
-- Listen UDP **57121** for `/ds/...`, `/garmin/...`, `/weather/...`, `/mic/...`, `/time/...`, `/human/...`
+- Listen UDP **57121** for `/ds/...`, `/garmin/...`, `/weather/...`, `/mic/...`, `/soundcard/...`, `/time/...`, `/human/...`, `/hands/...`
 - Send UDP **9001** e.g. `/ds/rumble 0.5 0.2`
 
 ### Example: Python (python-osc)

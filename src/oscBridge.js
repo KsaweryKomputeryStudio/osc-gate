@@ -178,6 +178,14 @@ export class OscBridge {
         this.onGateway(msg);
         return;
       }
+      if (
+        msg.type === 'soundcard-sample' ||
+        msg.type === 'soundcard-status' ||
+        msg.type === 'soundcard-devices'
+      ) {
+        this.onGateway(msg);
+        return;
+      }
 
       if (msg.type === 'osc') {
         this.stats.recvMessages++;

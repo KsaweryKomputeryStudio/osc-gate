@@ -296,8 +296,10 @@ function $$hide($) {
     'macbook',
     'weather',
     'mic',
+    'soundcard',
     'time',
     'human',
+    'hands',
     'insource',
   ].forEach((id) => $(`#view-${id}`)?.classList.add('hidden'));
 }

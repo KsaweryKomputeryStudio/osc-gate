@@ -5,4 +5,7 @@ export default defineConfig({
     port: 5173,
     open: true,
   },
+  optimizeDeps: {
+    exclude: ['@mediapipe/tasks-vision', 'satellite.js'],
+  },
 });

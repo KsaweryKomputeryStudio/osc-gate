@@ -16,6 +16,15 @@ import { WeatherSource, WEATHER_FIELDS, weatherToOsc, searchPlaces } from './wea
 import { MicSource } from './micSource.js';
 import { TimeSource, TIME_FIELDS, timeToOsc } from './timeSource.js';
 import { HumanCountSource, countToOsc } from './humanSource.js';
+import {
+  HandsSource,
+  GESTURE_KEYS,
+  HAND_HUD_KEYS,
+  HAND_SIDES,
+  emptyHandsSample,
+  flattenHands,
+} from './handsSource.js';
+import { flattenSoundcard, SOUNDCARD_MAX_CHANNELS } from './soundcardSource.js';
 import { startPerlinBg } from './perlinBg.js';
 import { AudioClock } from './audioClock.js';
 import {
@@ -78,6 +87,10 @@ const micOsc = { level: [] };
 let timeSource = null;
 let human = null;
 let humanCountAuto = null;
+let hands = null;
+let soundcardNative = false;
+let soundcardDevices = [];
+let soundcardConnected = false;
 let sourceStudio = null;
 let outCharts = null;
 
@@ -143,6 +156,12 @@ function init() {
     if ($('#human-connect-btn-2')) $('#human-connect-btn-2').disabled = true;
   }
 
+  if (!HandsSource.isSupported()) {
+    $('#hands-warning')?.classList.remove('hidden');
+    if ($('#hands-connect-btn')) $('#hands-connect-btn').disabled = true;
+    if ($('#hands-connect-btn-2')) $('#hands-connect-btn-2').disabled = true;
+  }
+
   if (!MidiSource.isSupported()) {
     $('#midi-warning')?.classList.remove('hidden');
     if ($('#midi-connect-btn')) $('#midi-connect-btn').disabled = true;
@@ -168,6 +187,8 @@ function init() {
   setupMicUi();
   setupTimeUi();
   setupHumanUi();
+  setupHandsUi();
+  setupSoundcardUi();
   setupMidiUi();
   setupGamepadUi();
   oscInMonitor = setupOscInMonitor({
@@ -565,10 +586,24 @@ function ensureGatewayConnection() {
 }
 
 function onGatewayMessage(msg) {
-  if (msg.type === 'hello' && msg.macbook) {
-    if (macbook?._want && msg.macbook.available && !macbookUsingNative) {
+  if (msg.type === 'hello') {
+    if (msg.macbook && macbook?._want && msg.macbook.available && !macbookUsingNative) {
       oscBridge?.send({ type: 'macbook', enabled: true, ...macbookOptionsFromUi() });
     }
+    if (msg.soundcard) applySoundcardHello(msg.soundcard);
+  }
+  if (msg.type === 'soundcard-devices') applySoundcardHello(msg);
+  if (msg.type === 'soundcard-status') {
+    onSoundcardStatus({
+      connected: !!msg.connected,
+      connecting: !!msg.connecting,
+      name: msg.name,
+      channels: msg.channels,
+      error: msg.error || '',
+    });
+  }
+  if (msg.type === 'soundcard-sample') {
+    onSoundcardSample(msg);
   }
   if (msg.type === 'macbook-status') {
     macbookUsingNative = !!msg.connected;
@@ -793,6 +828,12 @@ function onSourceRemoved(id) {
     padById.delete(id);
     padLast.delete(id);
   }
+  if (!listInstances().some((s) => s.type === 'hands')) {
+    disconnectHands({ forget: false });
+  }
+  if (!listInstances().some((s) => s.type === 'soundcard')) {
+    disconnectSoundcard({ forget: false });
+  }
 }
 
 function setActiveSection(id, { persist = true } = {}) {
@@ -802,7 +843,7 @@ function setActiveSection(id, { persist = true } = {}) {
     el.classList.toggle('active', el.dataset.section === id);
   });
   if (isIn) {
-    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'time', 'human'].forEach((name) => {
+    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'soundcard', 'time', 'human', 'hands'].forEach((name) => {
       $(`#view-${name}`)?.classList.add('hidden');
     });
     $('#view-insource')?.classList.remove('hidden');
@@ -1272,7 +1313,7 @@ function setupGarminUi() {
   if (listInstances().some((s) => s.type === 'garmin') && (saved.deviceId || saved.autoConnect)) {
     setTimeout(() => {
       garmin.reconnect(saved.deviceId).catch(() => {});
-    }, 250);
+    }, 800);
   }
 }
 
@@ -2051,6 +2092,181 @@ function onMicStatus({ connected, connecting, name, error }) {
   }
 }
 
+function persistSoundcardOptions() {
+  const prev = loadConfig().soundcard || {};
+  const channels = Math.max(
+    1,
+    Math.min(SOUNDCARD_MAX_CHANNELS, Number($('#soundcard-channels')?.value || prev.channels || 8)),
+  );
+  const opts = {
+    deviceId: $('#soundcard-device')?.value || prev.deviceId || '',
+    channels,
+    sensitivity: Number($('#soundcard-sensitivity')?.value || prev.sensitivity || 6),
+    smoothing: Number($('#soundcard-smoothing')?.value || prev.smoothing || 0.65),
+    autoConnect: prev.autoConnect,
+  };
+  saveConfig({ soundcard: opts });
+  const inst = instanceOfType('soundcard');
+  if (inst && Number(inst.settings?.channels) !== channels) {
+    patchInstance(inst.id, { settings: { ...inst.settings, channels } });
+    const view = $('#view-soundcard');
+    if (view && !view.classList.contains('hidden')) showSourceSignals(getInstance(inst.id), view);
+    buildSoundcardMeters(channels);
+  }
+  if (soundcardConnected) {
+    oscBridge?.send({ type: 'soundcard', enabled: true, ...opts });
+  }
+  return opts;
+}
+
+function setupSoundcardUi() {
+  const saved = loadConfig().soundcard || {};
+  if ($('#soundcard-channels')) $('#soundcard-channels').value = String(saved.channels ?? 8);
+  if ($('#soundcard-sensitivity')) $('#soundcard-sensitivity').value = String(saved.sensitivity ?? 6);
+  if ($('#soundcard-smoothing')) $('#soundcard-smoothing').value = String(saved.smoothing ?? 0.65);
+  buildSoundcardMeters(saved.channels ?? 8);
+
+  $('#soundcard-connect-btn')?.addEventListener('click', connectSoundcard);
+  $('#soundcard-connect-btn-2')?.addEventListener('click', connectSoundcard);
+  $('#soundcard-disconnect-btn')?.addEventListener('click', () => disconnectSoundcard({ forget: true }));
+  $('#soundcard-device')?.addEventListener('change', persistSoundcardOptions);
+  $('#soundcard-channels')?.addEventListener('change', persistSoundcardOptions);
+  $('#soundcard-sensitivity')?.addEventListener('input', persistSoundcardOptions);
+  $('#soundcard-smoothing')?.addEventListener('input', persistSoundcardOptions);
+  fillSoundcardDevices(soundcardDevices, saved.deviceId);
+}
+
+function applySoundcardHello(info) {
+  soundcardNative = !!info?.native;
+  soundcardDevices = Array.isArray(info?.devices) ? info.devices : [];
+  $('#soundcard-warning')?.classList.toggle('hidden', soundcardNative && !info?.error);
+  if (info?.error && $('#soundcard-error')) $('#soundcard-error').textContent = info.error;
+  fillSoundcardDevices(soundcardDevices, loadConfig().soundcard?.deviceId || info?.defaultId);
+  const saved = loadConfig().soundcard || {};
+  if (saved.autoConnect && listInstances().some((s) => s.type === 'soundcard') && !soundcardConnected) {
+    connectSoundcard();
+  }
+}
+
+function fillSoundcardDevices(devices, selectedId) {
+  const sel = $('#soundcard-device');
+  if (!sel) return;
+  const list = devices || [];
+  const want = String(selectedId || sel.value || '');
+  sel.innerHTML = [
+    '<option value="">Default input</option>',
+    ...list.map((d) => {
+      const label = `${d.name} (${d.channels} ch)`;
+      return `<option value="${escapeAttr(d.id)}" ${d.id === want ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }),
+  ].join('');
+}
+
+function buildSoundcardMeters(n) {
+  const host = $('#soundcard-meters');
+  if (!host) return;
+  const count = Math.max(1, Math.min(SOUNDCARD_MAX_CHANNELS, Number(n) || 8));
+  host.innerHTML = Array.from({ length: count }, (_, i) => {
+    const ch = i + 1;
+    return `<div class="soundcard-meter" data-ch="${ch}">
+      <span>Ch ${ch}</span>
+      <div class="soundcard-meter-bar"><i></i><b></b></div>
+      <span class="soundcard-meter-val" data-level>0.000</span>
+      <span class="soundcard-meter-val" data-peak>0.000</span>
+    </div>`;
+  }).join('');
+}
+
+function connectSoundcard() {
+  ensureGatewayConnection();
+  const opts = persistSoundcardOptions();
+  const sent = oscBridge?.send({ type: 'soundcard', enabled: true, ...opts });
+  if (!sent) {
+    onSoundcardStatus({ connected: false, error: 'Gateway not connected. Keep ./run running.' });
+    return;
+  }
+  onSoundcardStatus({ connected: false, connecting: true, name: 'Opening input…' });
+  saveConfig({ soundcard: { ...opts, autoConnect: true } });
+}
+
+function disconnectSoundcard({ forget = false } = {}) {
+  oscBridge?.send({ type: 'soundcard', enabled: false });
+  soundcardConnected = false;
+  onSoundcardStatus({ connected: false });
+  if (forget) saveConfig({ soundcard: { autoConnect: false } });
+}
+
+function onSoundcardStatus({ connected, connecting, name, channels, error }) {
+  soundcardConnected = !!connected;
+  setTypeDot('soundcard', { connected, connecting });
+  $('#soundcard-status-dot')?.classList.toggle('connected', !!connected);
+  $('#soundcard-status-dot')?.classList.toggle('connecting', !!connecting && !connected);
+  if ($('#soundcard-status-text')) {
+    $('#soundcard-status-text').textContent = connecting
+      ? 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#soundcard-connect-btn')) $('#soundcard-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#soundcard-connect-btn-2')) $('#soundcard-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#soundcard-disconnect-btn')) $('#soundcard-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#soundcard-overlay-title')) {
+    $('#soundcard-overlay-title').textContent = connecting ? name || 'Connecting…' : 'No soundcard';
+  }
+  if ($('#soundcard-error')) $('#soundcard-error').textContent = !connected && error ? error : '';
+  $('#soundcard-disconnected')?.classList.toggle('hidden', !!connected || !!connecting);
+  $('#soundcard-live')?.classList.toggle('hidden', !connected && !connecting);
+  if (name && $('#soundcard-device-name')) $('#soundcard-device-name').textContent = name;
+  if (channels) {
+    if ($('#soundcard-channels')) $('#soundcard-channels').value = String(channels);
+    buildSoundcardMeters(channels);
+    const inst = instanceOfType('soundcard');
+    if (inst) {
+      patchInstance(inst.id, { settings: { ...inst.settings, channels } });
+      const view = $('#view-soundcard');
+      if (view && !view.classList.contains('hidden')) showSourceSignals(getInstance(inst.id), view);
+    }
+  }
+}
+
+function onSoundcardSample(sample) {
+  if (!soundcardConnected) {
+    onSoundcardStatus({
+      connected: true,
+      name: sample.name,
+      channels: sample.channels,
+    });
+  }
+  const values = flattenSoundcard(sample);
+  if (sample.name && $('#soundcard-device-name')) {
+    $('#soundcard-device-name').textContent = `${sample.name} · ${sample.channels} ch`;
+  }
+  const host = $('#soundcard-meters');
+  if (host && host.children.length !== (sample.channels || 0)) buildSoundcardMeters(sample.channels);
+  (sample.levels || []).forEach((level, i) => {
+    const row = host?.querySelector(`[data-ch="${i + 1}"]`);
+    if (!row) return;
+    const peak = sample.peaks?.[i] || 0;
+    const bar = row.querySelector('i');
+    const mark = row.querySelector('b');
+    const lv = row.querySelector('[data-level]');
+    const pk = row.querySelector('[data-peak]');
+    if (bar) bar.style.width = `${(Math.min(1, Number(level) || 0) * 100).toFixed(1)}%`;
+    if (mark) mark.style.left = `${(Math.min(1, Number(peak) || 0) * 100).toFixed(1)}%`;
+    if (lv) lv.textContent = (Number(level) || 0).toFixed(3);
+    if (pk) pk.textContent = (Number(peak) || 0).toFixed(3);
+  });
+  const inst = instanceOfType('soundcard');
+  if (inst) fillSourceSignals(values, inst);
+  sendType(
+    'soundcard',
+    Object.entries(values).map(([key, v]) => ({ address: `/soundcard/${key}`, args: [Number(v) || 0] })),
+  );
+}
+
 function onMicSample({ level, peak, name }) {
   const lv = Number(level) || 0;
   const pk = Number(peak) || 0;
@@ -2366,6 +2582,201 @@ function onHumanSample({ count, present, name }) {
   ]);
 }
 
+function persistHandsOptions() {
+  const confidence = Number($('#hands-confidence')?.value || 0.5);
+  if ($('#hands-confidence-val')) $('#hands-confidence-val').textContent = confidence.toFixed(2);
+  const prev = loadConfig().hands || {};
+  const opts = {
+    deviceId: $('#hands-device')?.value || prev.deviceId || '',
+    confidence,
+    mirror: !!$('#hands-mirror')?.checked,
+    fingersRelative: !!$('#hands-fingers-relative')?.checked,
+    autoConnect: prev.autoConnect,
+  };
+  saveConfig({ hands: opts });
+  hands?.setOptions(opts);
+  return opts;
+}
+
+function setupHandsUi() {
+  const saved = loadConfig().hands || {};
+  if ($('#hands-confidence')) $('#hands-confidence').value = String(saved.confidence ?? 0.5);
+  if ($('#hands-confidence-val')) {
+    $('#hands-confidence-val').textContent = Number(saved.confidence ?? 0.5).toFixed(2);
+  }
+  if ($('#hands-mirror')) $('#hands-mirror').checked = saved.mirror !== false;
+  if ($('#hands-fingers-relative')) $('#hands-fingers-relative').checked = !!saved.fingersRelative;
+  buildHandsBoards();
+
+  hands = new HandsSource({
+    video: $('#hands-video'),
+    overlay: $('#hands-overlay'),
+    onSample: onHandsSample,
+    onStatus: onHandsStatus,
+  });
+  hands.setOptions(saved);
+
+  $('#hands-connect-btn')?.addEventListener('click', connectHands);
+  $('#hands-connect-btn-2')?.addEventListener('click', connectHands);
+  $('#hands-disconnect-btn')?.addEventListener('click', () => disconnectHands({ forget: true }));
+  $('#hands-confidence')?.addEventListener('input', persistHandsOptions);
+  $('#hands-device')?.addEventListener('change', persistHandsOptions);
+  $('#hands-mirror')?.addEventListener('change', persistHandsOptions);
+  $('#hands-fingers-relative')?.addEventListener('change', persistHandsOptions);
+
+  refreshHandsDevices(saved.deviceId);
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+    refreshHandsDevices($('#hands-device')?.value || loadConfig().hands.deviceId);
+  });
+  if (saved.autoConnect && listInstances().some((s) => s.type === 'hands')) setTimeout(() => connectHands(), 500);
+}
+
+function buildHandsBoards() {
+  for (const side of HAND_SIDES) {
+    const gHost = $(`#hands-${side}-gestures`);
+    if (gHost) {
+      gHost.innerHTML = GESTURE_KEYS.map(
+        (g) => `<span class="hands-chip" data-g="${g.id}">${g.label}</span>`,
+      ).join('');
+    }
+    const mHost = $(`#hands-${side}-meters`);
+    if (mHost) {
+      mHost.innerHTML = HAND_HUD_KEYS.map(
+        (row) => `<div class="hands-meter" data-k="${row.id}">
+          <span>${row.label}</span>
+          <div class="hands-meter-bar"><i></i></div>
+          <span class="hands-meter-val">0.000</span>
+        </div>`,
+      ).join('');
+    }
+  }
+}
+
+async function refreshHandsDevices(selectedId) {
+  const sel = $('#hands-device');
+  if (!sel || !HandsSource.isSupported()) return;
+  try {
+    const devices = await (hands || new HandsSource()).listDevices();
+    const want = selectedId || sel.value;
+    sel.innerHTML = [
+      '<option value="">Default camera</option>',
+      ...devices.map(
+        (d) =>
+          `<option value="${escapeAttr(d.id)}" ${d.id === want ? 'selected' : ''}>${escapeHtml(d.label)}</option>`,
+      ),
+    ].join('');
+  } catch {
+    if (!sel.options.length) sel.innerHTML = '<option value="">Grant camera to list devices</option>';
+  }
+}
+
+async function connectHands() {
+  persistHandsOptions();
+  try {
+    const info = await hands.connect($('#hands-device')?.value || '');
+    saveConfig({
+      hands: {
+        ...persistHandsOptions(),
+        deviceId: info.deviceId,
+        autoConnect: true,
+      },
+    });
+    await refreshHandsDevices(info.deviceId);
+  } catch (err) {
+    console.error(err);
+    onHandsStatus({ connected: false, error: err.message });
+  }
+}
+
+async function disconnectHands({ forget = false } = {}) {
+  await hands?.disconnect();
+  if (forget) saveConfig({ hands: { autoConnect: false } });
+  renderHandsBoards(emptyHandsSample());
+}
+
+function onHandsStatus({ connected, connecting, name, error, message, preview }) {
+  setTypeDot('hands', { connected, connecting });
+  $('#hands-status-dot')?.classList.toggle('connected', !!connected);
+  $('#hands-status-dot')?.classList.toggle('connecting', !!connecting);
+  if ($('#hands-status-text')) {
+    $('#hands-status-text').textContent = connecting
+      ? message || 'Connecting…'
+      : error
+        ? error
+        : connected
+          ? name || 'Live'
+          : 'Disconnected';
+  }
+  if ($('#hands-connect-btn')) $('#hands-connect-btn').disabled = !!connected || !!connecting;
+  if ($('#hands-connect-btn-2')) $('#hands-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#hands-disconnect-btn')) $('#hands-disconnect-btn').disabled = !connected && !connecting;
+  if ($('#hands-overlay-title')) {
+    $('#hands-overlay-title').textContent = connecting ? message || 'Connecting…' : 'No camera';
+  }
+  const showPreview = !!connected || !!preview || !!connecting;
+  $('#hands-disconnected')?.classList.toggle('hidden', showPreview);
+  $('#hands-live')?.classList.toggle('hidden', !showPreview);
+  if (name && $('#hands-device-name')) $('#hands-device-name').textContent = name;
+  if (preview) {
+    const inst = instanceOfType('hands');
+    if (inst) setActiveSection(inst.id);
+  }
+}
+
+function onHandsSample(sample) {
+  const values = flattenHands(sample);
+  renderHandsBoards(sample);
+  if (sample.name && $('#hands-device-name')) $('#hands-device-name').textContent = sample.name;
+  const inst = instanceOfType('hands');
+  if (inst) fillSourceSignals(values, inst);
+  sendType(
+    'hands',
+    Object.entries(values).map(([key, v]) => ({ address: `/hands/${key}`, args: [Number(v) || 0] })),
+  );
+}
+
+function renderHandsBoards(sample) {
+  const data = sample || emptyHandsSample();
+  for (const side of HAND_SIDES) {
+    const hand = data[side] || emptyHandsSample()[side];
+    const gLabel = GESTURE_KEYS.find((g) => g.id === hand.gesture)?.label;
+    const hud = $(`#hands-${side}-hud`);
+    if (hud) {
+      hud.textContent = hand.present
+        ? gLabel
+          ? `${gLabel} ${hand.gestureScore.toFixed(2)}`
+          : 'hand'
+        : '—';
+    }
+    const gname = $(`#hands-${side}-gname`);
+    if (gname) {
+      gname.textContent = hand.present
+        ? gLabel
+          ? `${gLabel} ${hand.gestureScore.toFixed(2)}`
+          : 'hand'
+        : '—';
+    }
+    $(`#hands-${side}-gestures`)?.querySelectorAll('[data-g]').forEach((el) => {
+      const on = (hand.gestures?.[el.dataset.g] || 0) >= 0.5 && hand.gesture === el.dataset.g;
+      el.classList.toggle('on', on);
+    });
+    for (const row of HAND_HUD_KEYS) {
+      const meter = document.querySelector(`#hands-${side}-meters [data-k="${row.id}"]`);
+      if (!meter) continue;
+      const v = Number(hand[row.id]) || 0;
+      const bar = meter.querySelector('i');
+      const val = meter.querySelector('.hands-meter-val');
+      if (bar) bar.style.width = `${(clampHands01(v) * 100).toFixed(1)}%`;
+      if (val) val.textContent = v.toFixed(3);
+    }
+  }
+}
+
+function clampHands01(v) {
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(1, Math.max(0, v));
+}
+
 function onTimeSample(sample) {
   if (!sample) return;
   const clock = sample.clock;
@@ -2398,9 +2809,9 @@ function onTimeSample(sample) {
 }
 
 async function connectGarmin() {
-  await ensureAudioClock();
   try {
     const device = await garmin.connect();
+    ensureAudioClock();
     saveConfig({
       garmin: {
         ...garminOptionsFromUi(),
@@ -2409,7 +2820,7 @@ async function connectGarmin() {
       },
     });
   } catch (err) {
-    if (err?.name !== 'NotFoundError') console.error(err);
+    if (err?.name !== 'NotFoundError' && err?.name !== 'NotAllowedError') console.error(err);
   }
 }
 
@@ -2571,7 +2982,7 @@ function onAudioTick() {
   macbook?.poll();
 }
 
-function onGarminStatus({ connected, connecting, reconnecting, name }) {
+function onGarminStatus({ connected, connecting, reconnecting, name, error, chooserOpen }) {
   const text = reconnecting
     ? 'Reconnecting…'
     : connecting
@@ -2584,9 +2995,17 @@ function onGarminStatus({ connected, connecting, reconnecting, name }) {
   $('#garmin-status-dot')?.classList.toggle('connecting', !!(connecting || reconnecting) && !connected);
   setTypeDot('garmin', { connected, connecting: connecting || reconnecting });
 
-  $('#garmin-connect-btn').disabled = !!connected || !!connecting;
+  const btOk = GarminHrSource.isSupported();
+  const lockChooser = !!chooserOpen;
+  $('#garmin-connect-btn').disabled = !btOk || !!connected || lockChooser;
   $('#garmin-disconnect-btn').disabled = !garmin?._wantConnect;
-  if ($('#garmin-connect-btn-2')) $('#garmin-connect-btn-2').disabled = !!connected || !!connecting;
+  if ($('#garmin-connect-btn-2')) $('#garmin-connect-btn-2').disabled = !btOk || !!connected || lockChooser;
+
+  const errEl = $('#garmin-connect-error');
+  if (errEl) {
+    errEl.textContent = !connected && error ? error : '';
+    errEl.classList.toggle('hidden', connected || !error);
+  }
 
   if ($('#garmin-overlay-title')) {
     $('#garmin-overlay-title').textContent = reconnecting

@@ -1889,6 +1889,181 @@ input[type='range'] {
   line-height: 1;
 }
 
+.hands-video-wrap video.mirror {
+  transform: scaleX(-1);
+}
+
+.hands-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  gap: 12px;
+}
+
+.hands-hud-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: var(--accent);
+  color: #000;
+  padding: 6px 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-width: 0;
+}
+
+.hands-hud-chip.right {
+  background: rgb(255, 210, 120);
+}
+
+.hands-hud-chip span {
+  font-size: 12px;
+}
+
+.hands-hud-chip strong {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hands-boards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.hands-board-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.hands-board-head h2 {
+  margin: 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hands-gname {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.hands-gestures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.hands-chip {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+
+.hands-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 700;
+}
+
+.hands-meter {
+  display: grid;
+  grid-template-columns: 72px 1fr 44px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.hands-meter-bar {
+  height: 8px;
+  background: rgba(255, 140, 0, 0.16);
+  overflow: hidden;
+}
+
+.hands-meter-bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+}
+
+.hands-meter-val {
+  font-family: var(--mono);
+  text-align: right;
+  color: var(--muted);
+}
+
+@media (max-width: 800px) {
+  .hands-boards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.soundcard-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.soundcard-meter {
+  display: grid;
+  grid-template-columns: 52px 1fr 44px 44px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.soundcard-meter-bar {
+  height: 10px;
+  background: rgba(255, 140, 0, 0.16);
+  overflow: hidden;
+  position: relative;
+}
+
+.soundcard-meter-bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+}
+
+.soundcard-meter-bar > b {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #fff;
+  opacity: 0.85;
+}
+
+.soundcard-meter-val {
+  font-family: var(--mono);
+  text-align: right;
+  color: var(--muted);
+}
+
 .source-settings {
   margin-bottom: 18px;
   display: flex;

@@ -702,6 +702,7 @@
               On the Garmin: <strong>Sensors &amp; Accessories → Heart Rate → Broadcast Heart Rate</strong>.<br />
               Disconnect Garmin Connect / the phone first — the watch typically allows one BLE connection.
             </p>
+            <p id="garmin-connect-error" class="nav-hint hidden"></p>
             <button id="garmin-connect-btn-2" class="primary" type="button">Connect Garmin</button>
           </div>
 
@@ -1023,6 +1024,53 @@
           </div>
         </div>
 
+        <div id="view-soundcard" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="soundcard-status-dot"></span>
+                <span id="soundcard-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="soundcard-connect-btn" class="primary">Connect</button>
+                <button id="soundcard-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">Beta. Reads the interface in the local gateway so you can meter more than stereo. Restart <code>./run</code> after install.</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="soundcard-device">Input</label>
+                <select id="soundcard-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="soundcard-channels">Channels</label>
+                <input type="number" id="soundcard-channels" class="text-input" min="1" max="16" step="1" value="8" />
+              </div>
+              <div class="control-group">
+                <label for="soundcard-sensitivity">Sensitivity</label>
+                <input type="range" id="soundcard-sensitivity" min="1" max="20" step="0.5" value="6" />
+              </div>
+              <div class="control-group">
+                <label for="soundcard-smoothing">Smoothing</label>
+                <input type="range" id="soundcard-smoothing" min="0" max="0.95" step="0.05" value="0.65" />
+              </div>
+            </div>
+          </div>
+          <div id="soundcard-warning" class="warning-banner hidden">
+            Soundcard needs the local gateway. Keep <code>./run</code> running. If the list is empty, grant mic permission to the terminal / macOS.
+          </div>
+          <div id="soundcard-disconnected" class="disconnected-overlay">
+            <h2 id="soundcard-overlay-title">No soundcard</h2>
+            <p>Connect to send per-channel level and peak as <code>/soundcard/ch/1</code> … (0–1).</p>
+            <p id="soundcard-error" class="nav-hint"></p>
+            <button id="soundcard-connect-btn-2" class="primary" type="button">Connect soundcard</button>
+          </div>
+          <div id="soundcard-live" class="hidden">
+            <p class="osc-hint" id="soundcard-device-name">—</p>
+            <div class="panel soundcard-meters" id="soundcard-meters"></div>
+          </div>
+        </div>
+
         <div id="view-time" class="view hidden">
           <div class="source-settings panel">
             <div class="source-settings-bar">
@@ -1117,6 +1165,85 @@
             </div>
             <p class="osc-hint" id="human-device-name">—</p>
             <p class="osc-hint" id="human-osc-hint"><code>/human/count</code> 0</p>
+          </div>
+        </div>
+
+        <div id="view-hands" class="view hidden">
+          <div class="source-settings panel">
+            <div class="source-settings-bar">
+              <div class="status-pill compact">
+                <span class="status-dot" id="hands-status-dot"></span>
+                <span id="hands-status-text">Disconnected</span>
+              </div>
+              <div class="nav-actions">
+                <button id="hands-connect-btn" class="primary">Connect</button>
+                <button id="hands-disconnect-btn" disabled>Disconnect</button>
+              </div>
+            </div>
+            <p class="nav-hint">MediaPipe Gesture Recognizer in the browser. Left / right hands as 0–1 OSC, plus canned gestures.</p>
+            <div class="source-settings-grid">
+              <div class="control-group">
+                <label for="hands-device">Camera</label>
+                <select id="hands-device" class="text-input"></select>
+              </div>
+              <div class="control-group">
+                <label for="hands-confidence">Confidence <span id="hands-confidence-val">0.50</span></label>
+                <input type="range" id="hands-confidence" min="0.2" max="0.85" step="0.05" value="0.5" />
+              </div>
+            </div>
+            <label class="osc-toggle">
+              <input type="checkbox" id="hands-mirror" checked />
+              Mirror preview (selfie)
+            </label>
+            <label class="osc-toggle">
+              <input type="checkbox" id="hands-fingers-relative" />
+              Fingers relative to hand
+            </label>
+          </div>
+          <div id="hands-warning" class="warning-banner hidden">
+            Camera access is not available in this browser. Use Chrome or Edge on desktop, over https or localhost.
+          </div>
+          <div id="hands-disconnected" class="disconnected-overlay">
+            <h2 id="hands-overlay-title">No camera</h2>
+            <p>Connect a webcam for left/right hand tracking. Sends <code>/hands/left/…</code> and <code>/hands/right/…</code>.</p>
+            <button id="hands-connect-btn-2" class="primary" type="button">Connect camera</button>
+          </div>
+          <div id="hands-live" class="hidden">
+            <div class="panel human-video-panel">
+              <div class="human-video-wrap hands-video-wrap">
+                <video id="hands-video" playsinline muted></video>
+                <canvas id="hands-overlay"></canvas>
+                <div class="hands-hud">
+                  <div class="hands-hud-chip" data-side="left">
+                    <span>L</span>
+                    <strong id="hands-left-hud">—</strong>
+                  </div>
+                  <div class="hands-hud-chip right" data-side="right">
+                    <span>R</span>
+                    <strong id="hands-right-hud">—</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="hands-boards">
+              <div class="panel hands-board" data-side="left">
+                <div class="hands-board-head">
+                  <h2>Left</h2>
+                  <span class="hands-gname" id="hands-left-gname">—</span>
+                </div>
+                <div class="hands-gestures" id="hands-left-gestures"></div>
+                <div class="hands-meters" id="hands-left-meters"></div>
+              </div>
+              <div class="panel hands-board" data-side="right">
+                <div class="hands-board-head">
+                  <h2>Right</h2>
+                  <span class="hands-gname" id="hands-right-gname">—</span>
+                </div>
+                <div class="hands-gestures" id="hands-right-gestures"></div>
+                <div class="hands-meters" id="hands-right-meters"></div>
+              </div>
+            </div>
+            <p class="osc-hint" id="hands-device-name">—</p>
           </div>
         </div>
 

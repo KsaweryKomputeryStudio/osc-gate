@@ -30,7 +30,17 @@ export const SOURCE_CATEGORIES = [
       { id: 'garmin', label: 'Garmin HR', icon: 'HR', prefix: '/garmin', kind: 'view', hint: 'Watch broadcast heart rate over Bluetooth LE.' },
       { id: 'macbook', label: 'MacBook', icon: 'MB', prefix: '/mac', kind: 'view', hint: 'Lid angle via the local gateway.' },
       { id: 'mic', label: 'Microphone', icon: 'MC', prefix: '/mic', kind: 'view', hint: 'Input volume as 0–1.' },
+      {
+        id: 'soundcard',
+        label: 'Soundcard',
+        icon: 'SC',
+        prefix: '/soundcard',
+        kind: 'view',
+        hint: 'Beta: multi-channel input via the local gateway (not the browser).',
+        defaults: { deviceId: '', channels: 8, sensitivity: 6, smoothing: 0.65, autoConnect: false },
+      },
       { id: 'human', label: 'Human count', icon: 'YO', prefix: '/human', kind: 'view', hint: 'Webcam + YOLOv8n person count.' },
+      { id: 'hands', label: 'Hands', icon: 'HA', prefix: '/hands', kind: 'view', hint: 'MediaPipe left/right hand landmarks, 0–1 values, and gestures.' },
     ],
   },
   {

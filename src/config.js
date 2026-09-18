@@ -42,8 +42,10 @@ export const DEFAULT_CONFIG = {
       macbook: true,
       weather: true,
       mic: true,
+      soundcard: true,
       time: true,
       human: true,
+      hands: true,
     },
   },
   signals: {
@@ -98,6 +100,13 @@ export const DEFAULT_CONFIG = {
     sensitivity: 6,
     smoothing: 0.65,
   },
+  soundcard: {
+    deviceId: '',
+    autoConnect: false,
+    channels: 8,
+    sensitivity: 6,
+    smoothing: 0.65,
+  },
   time: {
     autoStart: false,
     weekStart: 1,
@@ -117,6 +126,13 @@ export const DEFAULT_CONFIG = {
     countMode: 'off',
     countMin: 0,
     countMax: 8,
+  },
+  hands: {
+    deviceId: '',
+    autoConnect: false,
+    confidence: 0.5,
+    mirror: true,
+    fingersRelative: false,
   },
 };
 

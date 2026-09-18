@@ -9,8 +9,10 @@ export const OSC_SOURCES = [
   { id: 'macbook', label: 'MacBook', prefix: '/mac' },
   { id: 'weather', label: 'Weather', prefix: '/weather' },
   { id: 'mic', label: 'Microphone', prefix: '/mic' },
+  { id: 'soundcard', label: 'Soundcard', prefix: '/soundcard' },
   { id: 'time', label: 'Time', prefix: '/time' },
   { id: 'human', label: 'Human count', prefix: '/human' },
+  { id: 'hands', label: 'Hands', prefix: '/hands' },
 ];
 
 export function newDestId() {
