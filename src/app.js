@@ -35,9 +35,11 @@ import {
   roundEncoder,
 } from './encoderSource.js';
 import { startPerlinBg } from './perlinBg.js';
+import { setupDataBody } from './dataBody.js';
 import { AudioClock } from './audioClock.js';
 import {
   destLabel,
+  incomingHost,
   inSourceId,
   isRouted,
   newDestId,
@@ -46,6 +48,13 @@ import {
   setRoute,
 } from './oscRouting.js';
 import { setupOscInMonitor } from './oscInMonitor.js';
+import {
+  groupIncomingAddresses,
+  looksLikeDataOsc,
+  paintProfileViz,
+  readLocationCoords,
+  resolveInProfile,
+} from './inProfiles.js';
 import { argVals, asNumber, firstNumber, observeRange, transformArgs } from './oscInScale.js';
 
 const TOUCHPAD_W = 1920;
@@ -79,6 +88,7 @@ let oscInMonitor = { push() {}, renderSources() {}, render() {} };
 const inLive = new Map();
 const inAuto = new Map();
 let inChartTimer = null;
+const inLocationMaps = new Map();
 let macbookNativeWait = null;
 let macbookUsingNative = false;
 const macbookOsc = { angle: [], open: [] };
@@ -105,6 +115,8 @@ const encoderById = new Map();
 const encoderPulseTimers = new Map();
 let sourceStudio = null;
 let outCharts = null;
+let dataBody = null;
+let dataBodyOpen = false;
 
 const midiById = new Map();
 const padById = new Map();
@@ -216,6 +228,13 @@ function init() {
   });
   ensureGatewayConnection();
   outCharts = setupOutCharts({ $, loadConfig, saveConfig });
+  const pushOut = outCharts.push.bind(outCharts);
+  outCharts.push = (id, messages) => {
+    pushOut(id, messages);
+    dataBody?.push(id, messages);
+  };
+  dataBody = setupDataBody($('#databody-canvas'));
+  $('#databody-btn')?.addEventListener('click', () => toggleDataBody());
   setupSourceSignals({ loadConfig, saveConfig });
   sourceStudio = setupSourceStudio({
     $,
@@ -382,13 +401,15 @@ function removeDestination(id) {
 }
 
 function upsertIncomingSource(from) {
-  const addr = String(from || '').trim();
-  if (!addr || addr === 'unknown') return;
+  const host = incomingHost(from);
+  if (!host) return;
   const osc = loadConfig().osc;
-  const id = inSourceId(addr);
+  const id = inSourceId(host);
   const list = osc.inSources || [];
   if (list.some((s) => s.id === id)) return;
-  saveConfig({ osc: { inSources: [...list, { id, from: addr, name: addr, endpoints: {} }] } });
+  const remembered = osc.inProfileByHost?.[host];
+  const profile = remembered === 'dataosc' || remembered === 'none' ? remembered : '';
+  saveConfig({ osc: { inSources: [...list, { id, from: host, name: host, endpoints: {}, profile }] } });
   renderRoutingMatrix();
   renderInSourceNav();
   oscInMonitor.renderSources?.();
@@ -406,6 +427,29 @@ function renameIncomingSource(id, name) {
   oscInMonitor.renderSources?.();
   oscInMonitor.render?.();
   if (currentInSourceId() === id) renderInSourceView(id);
+}
+
+function setIncomingProfile(id, profileId) {
+  const osc = loadConfig().osc;
+  const profile = profileId === 'dataosc' ? 'dataosc' : 'none';
+  let host = '';
+  const list = (osc.inSources || []).map((s) => {
+    if (s.id !== id) return s;
+    host = s.from;
+    return { ...s, profile };
+  });
+  const byHost = { ...(osc.inProfileByHost || {}) };
+  if (host) byHost[host] = profile;
+  saveConfig({ osc: { inSources: list, inProfileByHost: byHost } });
+  if (currentInSourceId() === id) renderInSourceView(id);
+}
+
+function maybeAutoDataOscProfile(id, address) {
+  if (!looksLikeDataOsc(address)) return;
+  const osc = loadConfig().osc;
+  const src = (osc.inSources || []).find((s) => s.id === id);
+  if (!src || src.profile === 'dataosc' || src.profile === 'none') return;
+  setIncomingProfile(id, 'dataosc');
 }
 
 function removeIncomingSource(id) {
@@ -872,14 +916,18 @@ function setActiveSection(id, { persist = true } = {}) {
     el.classList.toggle('active', el.dataset.section === id);
   });
   if (isIn) {
-    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'soundcard', 'time', 'human', 'hands', 'encoder'].forEach((name) => {
+    ['empty', 'poll', 'controller', 'midi', 'gamepad', 'garmin', 'macbook', 'weather', 'mic', 'soundcard', 'time', 'human', 'hands', 'encoder', 'databody'].forEach((name) => {
       $(`#view-${name}`)?.classList.add('hidden');
     });
     $('#view-insource')?.classList.remove('hidden');
     renderInSourceView(id);
     startInSourceCharts();
     hideSourceSignals();
-    outCharts?.setSource(id, id);
+    {
+      const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
+      outCharts?.setSource(id, src?.name || src?.from || id);
+    }
+    if (dataBodyOpen) showDataBody();
     return;
   }
   stopInSourceCharts();
@@ -899,6 +947,48 @@ function setActiveSection(id, { persist = true } = {}) {
   if (type === 'midi') syncMidiView(inst);
   if (type === 'gamepad') syncGamepadView(inst);
   if (type === 'encoder') syncEncoderView(inst);
+  if (dataBodyOpen) showDataBody();
+}
+
+function toggleDataBody() {
+  if (dataBodyOpen) hideDataBody();
+  else showDataBody();
+}
+
+function showDataBody() {
+  dataBodyOpen = true;
+  [
+    'empty',
+    'poll',
+    'controller',
+    'midi',
+    'gamepad',
+    'garmin',
+    'macbook',
+    'weather',
+    'mic',
+    'soundcard',
+    'time',
+    'human',
+    'hands',
+    'encoder',
+    'insource',
+  ].forEach((name) => $(`#view-${name}`)?.classList.add('hidden'));
+  hideSourceSignals();
+  $('#view-databody')?.classList.remove('hidden');
+  $('main')?.classList.add('databody-on');
+  $('#databody-btn')?.classList.add('active');
+  dataBody?.resize();
+  dataBody?.start();
+}
+
+function hideDataBody() {
+  dataBodyOpen = false;
+  dataBody?.stop();
+  $('#view-databody')?.classList.add('hidden');
+  $('main')?.classList.remove('databody-on');
+  $('#databody-btn')?.classList.remove('active');
+  setActiveSection(loadConfig().ui.activeSection, { persist: false });
 }
 
 function currentInSourceId() {
@@ -938,6 +1028,22 @@ function setEndpointOpen(sourceId, address, open) {
       inEndpointOpen: {
         ...prev,
         [sourceId]: { ...(prev[sourceId] || {}), [address]: !!open },
+      },
+    },
+  });
+}
+
+function isGroupOpen(sourceId, groupId) {
+  return !!loadConfig().ui.inGroupOpen?.[sourceId]?.[groupId];
+}
+
+function setGroupOpen(sourceId, groupId, open) {
+  const prev = loadConfig().ui.inGroupOpen || {};
+  saveConfig({
+    ui: {
+      inGroupOpen: {
+        ...prev,
+        [sourceId]: { ...(prev[sourceId] || {}), [groupId]: !!open },
       },
     },
   });
@@ -993,6 +1099,10 @@ function setupInSourceNav() {
     const id = currentInSourceId();
     if (id) renameIncomingSource(id, e.target.value);
   });
+  $('#insource-profile')?.addEventListener('change', (e) => {
+    const id = currentInSourceId();
+    if (id) setIncomingProfile(id, e.target.value);
+  });
   setupInSourceView();
   renderInSourceNav();
 }
@@ -1010,6 +1120,17 @@ function setupInSourceView() {
       setEndpointSpec(id, address, { mode: modeBtn.dataset.mode });
       refreshLiveOut(id, address);
       renderInSourceView(id);
+      return;
+    }
+    const groupBtn = e.target.closest('.in-group-toggle');
+    if (groupBtn) {
+      const section = groupBtn.closest('.in-group');
+      const groupId = section?.dataset.group;
+      if (!groupId) return;
+      const open = !section.classList.contains('open');
+      section.classList.toggle('open', open);
+      setGroupOpen(id, groupId, open);
+      if (open) requestAnimationFrame(drawInSourceCharts);
       return;
     }
     const reset = e.target.closest('.insource-reset');
@@ -1113,9 +1234,9 @@ function setEndpointSpec(sourceId, address, patch) {
 }
 
 function noteIncomingEndpoint(msg) {
-  const id = msg.sourceId || (msg.from ? inSourceId(msg.from) : '');
+  const id = inSourceId(msg.sourceId || msg.from || '');
   const address = String(msg.address || '');
-  if (!id || !address) return;
+  if (!incomingHost(msg.sourceId || msg.from || '') || !address) return;
   let map = inLive.get(id);
   if (!map) {
     map = new Map();
@@ -1141,7 +1262,10 @@ function noteIncomingEndpoint(msg) {
     autoMax: observed?.max,
     series,
   });
+  const liveN = firstNumber(out) ?? firstNumber(raw);
+  if (liveN != null) outCharts?.push(id, [{ address, args: [liveN], out: liveN }]);
   const added = ensureIncomingEndpoint(id, address);
+  maybeAutoDataOscProfile(id, address);
   const dot = document.querySelector(`[data-in-dot="${CSS.escape(id)}"]`);
   if (dot) {
     dot.classList.add('connected');
@@ -1174,33 +1298,15 @@ function patchInSourceRow(address, live, sourceId) {
   }
 }
 
-function renderInSourceView(id) {
-  const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
-  if (!src) {
-    setActiveSection(listInstances()[0]?.id || '');
-    return;
-  }
-  const nameEl = $('#insource-name');
-  if (nameEl && document.activeElement !== nameEl) nameEl.value = src.name || src.from;
-  if ($('#insource-from')) $('#insource-from').textContent = src.from;
-  const root = $('#insource-endpoints');
-  if (!root) return;
-  const liveMap = inLive.get(id) || new Map();
-  const addrs = [...new Set([...Object.keys(src.endpoints || {}), ...liveMap.keys()])].sort();
-  if (!addrs.length) {
-    root.innerHTML = '<p class="osc-hint">Waiting for incoming OSC endpoints…</p>';
-    return;
-  }
-  root.innerHTML = addrs
-    .map((address) => {
-      const spec = src.endpoints?.[address] || { mode: 'off', min: 0, max: 1 };
-      const live = liveMap.get(address) || {};
-      const minVal = spec.mode === 'auto' && live.autoMin != null ? live.autoMin : spec.min;
-      const maxVal = spec.mode === 'auto' && live.autoMax != null ? live.autoMax : spec.max;
-      const auto = spec.mode === 'auto';
-      const open = isEndpointOpen(id, address);
-      const showRange = spec.mode !== 'off';
-      return `<div class="panel insource-ep ${open ? 'open' : ''}" data-addr="${escapeAttr(address)}">
+function incomingEndpointRowHtml(id, src, liveMap, address) {
+  const spec = src.endpoints?.[address] || { mode: 'off', min: 0, max: 1 };
+  const live = liveMap.get(address) || {};
+  const minVal = spec.mode === 'auto' && live.autoMin != null ? live.autoMin : spec.min;
+  const maxVal = spec.mode === 'auto' && live.autoMax != null ? live.autoMax : spec.max;
+  const auto = spec.mode === 'auto';
+  const open = isEndpointOpen(id, address);
+  const showRange = spec.mode !== 'off';
+  return `<div class="panel insource-ep ${open ? 'open' : ''}" data-addr="${escapeAttr(address)}">
         <button type="button" class="insource-ep-head">
           <span class="insource-ep-caret">▾</span>
           <span class="insource-ep-addr">${escapeHtml(address)}</span>
@@ -1237,6 +1343,142 @@ function renderInSourceView(id) {
           </div>
         </div>
       </div>`;
+}
+
+function incomingVizClass(viz) {
+  if (viz === 'compass') return 'in-viz-compass';
+  if (viz === 'xyz') return 'in-viz-xyz';
+  if (viz === 'mic') return 'in-viz-mic';
+  if (viz === 'map') return 'in-viz-map';
+  return 'in-viz-meters';
+}
+
+function incomingGroupVizHtml(group) {
+  if (!group?.viz) return '';
+  if (group.viz === 'map') {
+    return `<div class="in-viz-map-wrap">
+      <div class="in-group-viz in-viz-map geomap-host" data-in-map="${escapeAttr(group.id)}"></div>
+      <div class="in-map-coords" data-in-map-coords="${escapeAttr(group.id)}">Waiting for coordinates…</div>
+    </div>`;
+  }
+  return `<canvas class="in-group-viz ${incomingVizClass(group.viz)}" data-in-viz="${escapeAttr(group.id)}" data-viz="${escapeAttr(group.viz)}"></canvas>`;
+}
+
+function persistInLocationMap(state) {
+  if (!state?.map) return;
+  state.lat = state.map.lat;
+  state.lon = state.map.lon;
+  state.zoom = state.map.zoom;
+  state.follow = state.map.follow;
+  state.map.destroy();
+  state.map = null;
+}
+
+function syncInLocationMap(sourceId, groups, liveMap) {
+  const host = document.querySelector('#insource-endpoints [data-in-map="location"]');
+  const group = groups.find((g) => g.id === 'location' && g.viz === 'map');
+  for (const [id, state] of inLocationMaps) {
+    if (state.map && (!state.map.host?.isConnected || (id === sourceId && state.map.host !== host))) {
+      persistInLocationMap(state);
+    }
+  }
+  if (!host || !group) return;
+  let state = inLocationMaps.get(sourceId);
+  if (!state) {
+    state = { follow: true, zoom: 3 };
+    inLocationMaps.set(sourceId, state);
+  }
+  if (!state.map || state.map.host !== host) {
+    persistInLocationMap(state);
+    const coords = readLocationCoords(group.addresses, liveMap);
+    const startLat = Number.isFinite(state.fixLat) ? state.fixLat : coords.lat;
+    const startLon = Number.isFinite(state.fixLon) ? state.fixLon : coords.lon;
+    const map = new GeoMap(host, {
+      lat: Number.isFinite(startLat) ? startLat : 20,
+      lon: Number.isFinite(startLon) ? startLon : 0,
+      zoom: state.zoom || (state.hadFix ? 14 : 3),
+      pickable: false,
+    });
+    map.follow = state.follow !== false;
+    if (Number.isFinite(state.fixLat) && Number.isFinite(state.fixLon)) {
+      map.setPick(state.fixLat, state.fixLon, { fly: false });
+    }
+    state.map = map;
+    requestAnimationFrame(() => map.resize());
+  }
+  updateInLocationMap(sourceId, group, liveMap);
+}
+
+function updateInLocationMap(sourceId, group, liveMap) {
+  const state = inLocationMaps.get(sourceId);
+  if (!state?.map || !group) return;
+  const { lat, lon } = readLocationCoords(group.addresses, liveMap);
+  const label = document.querySelector(`#insource-endpoints [data-in-map-coords="${group.id}"]`);
+  if (label) {
+    label.textContent =
+      Number.isFinite(lat) && Number.isFinite(lon) ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'Waiting for coordinates…';
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  const moved =
+    !Number.isFinite(state.fixLat) ||
+    Math.abs(lat - state.fixLat) > 1e-7 ||
+    Math.abs(lon - state.fixLon) > 1e-7;
+  if (!moved && state.map.pick) return;
+  const first = !state.hadFix;
+  state.hadFix = true;
+  state.fixLat = lat;
+  state.fixLon = lon;
+  if (first) {
+    state.map.follow = true;
+    state.map.setPick(lat, lon, { fly: true, zoom: 14 });
+  } else {
+    state.map.setPick(lat, lon, { fly: false });
+    if (state.map.follow) state.map.setView(lat, lon);
+  }
+  state.lat = state.map.lat;
+  state.lon = state.map.lon;
+  state.zoom = state.map.zoom;
+  state.follow = state.map.follow;
+}
+
+function renderInSourceView(id) {
+  const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
+  if (!src) {
+    setActiveSection(listInstances()[0]?.id || '');
+    return;
+  }
+  const nameEl = $('#insource-name');
+  if (nameEl && document.activeElement !== nameEl) nameEl.value = src.name || src.from;
+  if ($('#insource-from')) $('#insource-from').textContent = src.from;
+  const liveMap = inLive.get(id) || new Map();
+  const addrs = [...new Set([...Object.keys(src.endpoints || {}), ...liveMap.keys()])].sort();
+  const profile = resolveInProfile(src, addrs);
+  const profileEl = $('#insource-profile');
+  if (profileEl && document.activeElement !== profileEl) profileEl.value = profile;
+  const root = $('#insource-endpoints');
+  if (!root) return;
+  if (!addrs.length) {
+    root.innerHTML = '<p class="osc-hint">Waiting for incoming OSC endpoints…</p>';
+    return;
+  }
+  const groups = groupIncomingAddresses(profile, addrs);
+  root.innerHTML = groups
+    .map((group) => {
+      const rows = group.addresses.map((address) => incomingEndpointRowHtml(id, src, liveMap, address)).join('');
+      if (!group.label) return rows;
+      const open = isGroupOpen(id, group.id);
+      const viz = incomingGroupVizHtml(group);
+      return `<section class="in-group ${open ? 'open' : ''}" data-group="${escapeAttr(group.id)}">
+        <button type="button" class="in-group-toggle">
+          <span class="insource-ep-caret">▾</span>
+          <h3>${escapeHtml(group.label)}</h3>
+          <span class="in-group-count">${group.addresses.length}</span>
+        </button>
+        ${viz ? `<div class="in-group-preview">${viz}</div>` : ''}
+        <div class="in-group-body">
+          <div class="in-group-eps">${rows}</div>
+        </div>
+      </section>`;
     })
     .join('');
   requestAnimationFrame(drawInSourceCharts);
@@ -3608,6 +3850,14 @@ function drawInSourceCharts() {
   if (!id) return;
   const liveMap = inLive.get(id) || new Map();
   const src = (loadConfig().osc.inSources || []).find((s) => s.id === id);
+  const addrs = [...new Set([...Object.keys(src?.endpoints || {}), ...liveMap.keys()])];
+  const profile = resolveInProfile(src, addrs);
+  const groups = groupIncomingAddresses(profile, addrs);
+  $('#insource-endpoints')?.querySelectorAll('canvas[data-in-viz]').forEach((canvas) => {
+    const group = groups.find((g) => g.id === canvas.dataset.inViz);
+    if (group) paintProfileViz(canvas, group, liveMap);
+  });
+  syncInLocationMap(id, groups, liveMap);
   $('#insource-endpoints')
     ?.querySelectorAll('.insource-ep.open canvas.insource-ep-chart')
     .forEach((canvas) => {

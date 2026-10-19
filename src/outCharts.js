@@ -100,7 +100,7 @@ export function setupOutCharts({ $, saveConfig, loadConfig }) {
       const addr = m.address;
       const n = Number(m.out ?? m.args?.[0]);
       if (!addr || !Number.isFinite(n)) continue;
-      const key = inst ? signalKey(inst, addr) : addr;
+      const key = inst ? signalKey(inst, addr) : String(addr).replace(/^\//, '');
       vals[key] = n;
       const list = series.get(addr) || [];
       if (!series.has(addr)) added = true;
@@ -156,7 +156,10 @@ export function setupOutCharts({ $, saveConfig, loadConfig }) {
       return;
     }
     if (!rows.length) {
-      body.innerHTML = '<p class="osc-hint">Waiting for OSC output…</p>';
+      const incoming = String(sourceId).startsWith('in:');
+      body.innerHTML = incoming
+        ? '<p class="osc-hint">Waiting for incoming OSC…</p>'
+        : '<p class="osc-hint">Waiting for OSC output…</p>';
       return;
     }
     const vals = lastVal.get(sourceId) || {};

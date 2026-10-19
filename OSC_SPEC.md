@@ -25,7 +25,7 @@ Hands ──MediaPipe─────────▶┘
 | OSC receive (world → browser) | `0.0.0.0:9001` (configurable in UI) | `OSC_IN_PORT` (until UI connects) |
 | WebSocket bridge | `ws://127.0.0.1:8081` | `WS_PORT` |
 
-Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, `hands` `/hands`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is `IP:PORT`).
+Routing: each source (`controller` `/ds`, `garmin` `/garmin`, `macbook` `/mac`, `weather` `/weather`, `mic` `/mic`, `time` `/time`, `human` `/human`, `hands` `/hands`, plus auto-detected incoming UDP senders) can be toggled per destination. Missing cells are **on** (everything goes everywhere). Incoming packets on `:inPort` (default 9001) appear in the bottom monitor and are **passed through** to routed destinations. Rename or delete a sender in the monitor Sources row (default name is the sender **IP**; the UDP source port is ignored so a phone that binds a new port each session stays one source).
 
 Address prefixes: `/ds` (DualSense), `/garmin` (heart rate), `/mac` (MacBook sensors), `/weather`, `/mic`, `/time`, `/human`, `/hands`, `/soundcard`, `/encoder`, `/midi`, `/pad`, plus poll sources (`/tube`, `/roads`, `/sun`, `/moon`, `/kp`, `/xray`, `/quake`, `/eonet`, `/gdacs`, `/marine`, `/gbif`, `/inat`, `/ais`, `/hydro`, `/hn`, `/bsky`, `/masto`, `/wiki`, `/wikilive`, `/iss`, `/sat`, `/neo`, `/apod`, `/crypto`, `/fx`, `/lb`, `/mb`, `/lastfm`, `/rng`, `/cards`, `/gios`, `/imgw`, `/uv`, `/owm`, `/waqi`, `/tomtom`, `/here`, `/gtfs`, `/ipgeo`, `/donki`, `/randorg`, `/aq`, `/people`, `/aurora`, `/solarwind`, `/tides`, `/flood`, `/github`, `/carbon`, `/eth`, `/fng`, `/mempool`, `/joke`, `/yesno`, `/nbp`, `/holiday`).
 
@@ -278,7 +278,9 @@ Switch cycles the selected named signal and sends that name. Rotation steps the 
 ## Inbound (your app → gateway `:9001` → controller)
 
 Send OSC UDP to the gateway **in** port (default **9001**, set in OSC Configuration). Values are floats `0..1` unless noted.
-The bottom **Incoming OSC** dock shows these packets (raw log or compact per-address list + sparkline). New senders are added as sources (`IP:PORT`, rename / delete). Routed destinations receive a **passthrough** copy of the same packet.
+The bottom **Incoming OSC** dock shows these packets (raw log or compact per-address list + sparkline). New senders are added as sources (by **IP**, rename / delete). Routed destinations receive a **passthrough** copy of the same packet.
+
+Incoming sources have a **Profile**. **DataOSC** (remembered per IP) groups `/data/compass/…`, `/data/motion/accelerometer/…`, `/data/motion/gyroscope/…`, `/data/microphone/…`, face, body, location, and draws a live compass / XYZ / mic / map preview.
 
 ### Haptics / rumble
 

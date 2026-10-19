@@ -3,7 +3,7 @@
  * Survives restarts; migrates the old DualSense-only key.
  */
 
-import { normalizeDestinations, normalizeInSources, normalizeRouting } from './oscRouting.js';
+import { normalizeDestinations, normalizeInSources, remapIncomingRouting } from './oscRouting.js';
 
 const STORAGE_KEY = 'osc-gate-config';
 const LEGACY_KEY = 'dualsense-osc-config';
@@ -20,6 +20,7 @@ export const DEFAULT_CONFIG = {
     destinations: [{ id: 'default', name: 'Primary', host: '127.0.0.1', port: 57121 }],
     routing: {},
     inSources: [],
+    inProfileByHost: {},
     wsUrl: 'ws://127.0.0.1:8081',
     inPort: 9001,
     hz: 60,
@@ -36,6 +37,7 @@ export const DEFAULT_CONFIG = {
     signalsCollapsed: false,
     configTab: 'osc',
     inEndpointOpen: {},
+    inGroupOpen: {},
     sectionsOpen: {
       controller: true,
       garmin: true,
@@ -197,7 +199,7 @@ function normalizeLoaded(cfg) {
   cfg.osc = {
     ...cfg.osc,
     destinations,
-    routing: normalizeRouting(cfg.osc.routing),
+    routing: remapIncomingRouting(cfg.osc.routing),
     inSources: normalizeInSources(cfg.osc.inSources),
     host: destinations[0].host,
     port: destinations[0].port,

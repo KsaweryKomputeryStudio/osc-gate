@@ -21,6 +21,7 @@ import dgram from 'node:dgram';
 import { MacbookLidPoller, probeLidSensor } from './macbookLid.js';
 import { SoundcardCapture, probeSoundcard } from './soundcard.js';
 import { EncoderHub, probeEncoder } from './encoder.js';
+import { incomingHost, inSourceId } from '../src/oscRouting.js';
 import { argValue, asNumber, normalizeSpec, observeRange, transformArgs } from '../src/oscInScale.js';
 
 const OSC_OUT_HOST = process.env.OSC_OUT_HOST || '127.0.0.1';
@@ -116,10 +117,12 @@ function bindIncoming(port) {
     console.log(`[OSC] listening (in)  udp://0.0.0.0:${inPort}`);
   });
   port.on('message', (msg, timeTag, info) => {
-    const from = info ? `${info.address}:${info.port}` : 'unknown';
-    const sourceId = `in:${from}`;
+    const fromHost = incomingHost(info?.address) || 'unknown';
+    const fromPort = Number(info?.port);
+    const from = fromHost;
+    const sourceId = inSourceId(fromHost);
     const transformed = transformIncomingArgs(sourceId, msg.address, msg.args || []);
-    passthroughIncoming({ address: msg.address, args: transformed.args }, sourceId, from);
+    passthroughIncoming({ address: msg.address, args: transformed.args }, sourceId, fromHost, fromPort);
     if (!browserClient || browserClient.readyState !== 1) return;
     browserClient.send(
       JSON.stringify({
@@ -135,6 +138,7 @@ function bindIncoming(port) {
         autoMin: transformed.autoMin,
         autoMax: transformed.autoMax,
         from,
+        fromPort: Number.isFinite(fromPort) ? fromPort : undefined,
         sourceId,
       }),
     );
@@ -215,12 +219,11 @@ function sameHost(a, b) {
   return isLocalHost(x) && isLocalHost(y);
 }
 
-function destWouldLoop(dest, from) {
-  const match = String(from || '').match(/^(.*):(\d+)$/);
-  const fromHost = match?.[1];
-  const fromPort = match ? Number(match[2]) : NaN;
+function destWouldLoop(dest, fromHost, fromPort) {
   if (Number(dest.port) === inPort && isLocalHost(dest.host)) return true;
-  if (fromHost && Number(dest.port) === fromPort && sameHost(dest.host, fromHost)) return true;
+  if (fromHost && Number.isFinite(fromPort) && Number(dest.port) === fromPort && sameHost(dest.host, fromHost)) {
+    return true;
+  }
   return false;
 }
 
@@ -258,7 +261,7 @@ function transformIncomingArgs(sourceId, address, args) {
   return transformArgs(args, spec, autoRange[key] || null);
 }
 
-function passthroughIncoming(msg, sourceId, from) {
+function passthroughIncoming(msg, sourceId, fromHost, fromPort) {
   if (!msg?.address) return;
   const dests = destinations.length ? destinations : [{ id: 'default', host: outHost, port: outPort }];
   let buf;
@@ -271,7 +274,7 @@ function passthroughIncoming(msg, sourceId, from) {
   try {
     for (const dest of dests) {
       if (!isRouted(sourceId, dest.id)) continue;
-      if (destWouldLoop(dest, from)) continue;
+      if (destWouldLoop(dest, fromHost, fromPort)) continue;
       udpSocket.send(buf, dest.port, dest.host);
       packetsSent++;
     }

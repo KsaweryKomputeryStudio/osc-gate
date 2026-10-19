@@ -43,12 +43,14 @@ export function readBrowserLocation() {
 }
 
 export class GeoMap {
-  constructor(host, { lat = 40, lon = 10, zoom = 3, onPick } = {}) {
+  constructor(host, { lat = 40, lon = 10, zoom = 3, onPick, pickable = true } = {}) {
     this.host = host;
     this.lat = lat;
     this.lon = lon;
     this.zoom = zoom;
     this.onPick = onPick || (() => {});
+    this.pickable = pickable !== false;
+    this.follow = false;
     this.pick = null;
     this._drag = null;
     this._moved = false;
@@ -91,10 +93,10 @@ export class GeoMap {
     this.render();
   }
 
-  setPick(lat, lon, { fly = true } = {}) {
+  setPick(lat, lon, { fly = true, zoom } = {}) {
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
     this.pick = { lat, lon };
-    if (fly) this.setView(lat, lon, Math.max(this.zoom, 8));
+    if (fly) this.setView(lat, lon, zoom ?? Math.max(this.zoom, 8));
     else this.render();
   }
 
@@ -103,12 +105,19 @@ export class GeoMap {
     this.render();
   }
 
-  zoomBy(delta) {
+  zoomBy(delta, { user = true } = {}) {
+    if (user) this.follow = false;
     this.zoom = clamp(this.zoom + delta, 1, 18);
     this.render();
   }
 
   locate() {
+    if (!this.pickable) {
+      if (!this.pick) return Promise.resolve(null);
+      this.follow = true;
+      this.setView(this.pick.lat, this.pick.lon, Math.max(this.zoom, 12));
+      return Promise.resolve(this.pick);
+    }
     return readBrowserLocation().then(({ lat, lon }) => {
       this.setPick(lat, lon);
       this.onPick({ lat, lon, source: 'locate' });
@@ -118,6 +127,11 @@ export class GeoMap {
 
   resize() {
     this.render();
+  }
+
+  destroy() {
+    this._ro?.disconnect();
+    this._ro = null;
   }
 
   _onDown(e) {
@@ -130,7 +144,10 @@ export class GeoMap {
     if (!this._drag) return;
     const dx = e.clientX - this._drag.x;
     const dy = e.clientY - this._drag.y;
-    if (Math.hypot(dx, dy) > 4) this._moved = true;
+    if (Math.hypot(dx, dy) > 4) {
+      this._moved = true;
+      this.follow = false;
+    }
     const z = this.zoom;
     this.lon = xToLon(lonToX(this._drag.lon, z) - dx / TILE, z);
     this.lat = clamp(yToLat(latToY(this._drag.lat, z) - dy / TILE, z), -85, 85);
@@ -142,6 +159,7 @@ export class GeoMap {
     const wasDrag = this._moved;
     this._endDrag();
     if (wasDrag) return;
+    if (!this.pickable) return;
     const pt = this._eventToLatLon(e);
     this.setPick(pt.lat, pt.lon, { fly: false });
     this.onPick({ ...pt, source: 'map' });

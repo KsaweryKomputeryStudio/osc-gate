@@ -20,8 +20,21 @@ export function newDestId() {
   return `d_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
+/** Host part of an incoming UDP sender. Drops the ephemeral source port. */
+export function incomingHost(from) {
+  let host = String(from || '').trim();
+  if (!host || host === 'unknown') return '';
+  if (host.startsWith('in:')) host = host.slice(3);
+  if (host.startsWith('::ffff:')) host = host.slice(7);
+  const v4 = host.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/);
+  if (v4) return v4[1];
+  const bracket = host.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracket) return bracket[1];
+  return host;
+}
+
 export function inSourceId(from) {
-  return `in:${String(from || 'unknown')}`;
+  return `in:${incomingHost(from) || String(from || 'unknown').trim() || 'unknown'}`;
 }
 
 export function normalizeDestinations(osc = {}) {
@@ -56,15 +69,35 @@ export function normalizeEndpoints(map) {
 
 export function normalizeInSources(list) {
   if (!Array.isArray(list)) return [];
-  return list.filter(Boolean).map((s, i) => {
-    const from = String(s.from || '').trim() || `unknown:${i}`;
-    return {
-      id: String(s.id || inSourceId(from)),
-      from,
-      name: String(s.name || from),
-      endpoints: normalizeEndpoints(s.endpoints),
-    };
+  const byId = new Map();
+  list.filter(Boolean).forEach((s, i) => {
+    const host = incomingHost(s.from) || incomingHost(s.id) || `unknown:${i}`;
+    const id = inSourceId(host);
+    const endpoints = normalizeEndpoints(s.endpoints);
+    const defaultName = !s.name || s.name === s.from || s.name === s.id || incomingHost(s.name) === host;
+    const name = defaultName ? host : String(s.name);
+    const existing = byId.get(id);
+    const profile = s.profile === 'dataosc' || s.profile === 'none' ? s.profile : existing?.profile || '';
+    if (!existing) {
+      byId.set(id, { id, from: host, name, endpoints, profile });
+      return;
+    }
+    existing.endpoints = { ...existing.endpoints, ...endpoints };
+    if (!defaultName) existing.name = name;
+    if (profile) existing.profile = profile;
   });
+  return [...byId.values()];
+}
+
+/** Fold legacy in:IP:port routing rows onto in:IP. */
+export function remapIncomingRouting(routing) {
+  const src = normalizeRouting(routing);
+  const next = {};
+  for (const [id, row] of Object.entries(src)) {
+    const key = id.startsWith('in:') ? inSourceId(id) : id;
+    next[key] = { ...(next[key] || {}), ...(row || {}) };
+  }
+  return next;
 }
 
 export function routingSources(inSources = [], instances = []) {

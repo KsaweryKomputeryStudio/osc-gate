@@ -34,6 +34,9 @@
             <span class="osc-status-dot" id="osc-header-dot"></span>
             <span class="osc-dest-label" id="osc-dest-label">127.0.0.1:57121</span>
           </button>
+          <button id="databody-btn" type="button" class="osc-settings-btn" title="3D preview of live OSC as one body" aria-label="Data preview">
+            Preview
+          </button>
           <button id="osc-config-open" type="button" class="osc-settings-btn" title="Configuration" aria-label="Configuration">
             Config
           </button>
@@ -1319,16 +1322,28 @@
           </div>
         </div>
 
+        <div id="view-databody" class="view hidden">
+          <canvas id="databody-canvas"></canvas>
+          <div class="databody-hud">
+            <span><b id="databody-count">0</b> signals</span>
+            <span id="databody-flow">still</span>
+            <span class="databody-hint">One body · drag to orbit · scroll zoom</span>
+          </div>
+        </div>
+
         <div id="view-insource" class="view hidden">
           <div class="panel insource-head">
             <div class="insource-head-row">
               <input type="text" id="insource-name" class="text-input insource-name" />
               <span class="osc-hint" id="insource-from"></span>
+              <div class="control-group insource-profile-wrap">
+                <label for="insource-profile">Profile</label>
+                <select id="insource-profile" class="text-input">
+                  <option value="none">None</option>
+                  <option value="dataosc">DataOSC</option>
+                </select>
+              </div>
             </div>
-            <p class="osc-hint">
-              Off passes values through. Auto maps the detected min/max to 0–1.
-              Manual uses the range you set. Expand an endpoint for the live chart.
-            </p>
           </div>
           <div id="insource-endpoints" class="insource-endpoints"></div>
         </div>

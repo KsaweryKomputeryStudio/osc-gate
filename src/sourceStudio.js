@@ -301,6 +301,7 @@ function $$hide($) {
     'human',
     'hands',
     'encoder',
+    'databody',
     'insource',
   ].forEach((id) => $(`#view-${id}`)?.classList.add('hidden'));
 }

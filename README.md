@@ -34,7 +34,8 @@ Then log out and back in. Restart the gateway after install so it picks up GPIO.
 - **Encoder** (Raspberry Pi) — KY-040-style rotary encoder + switch on BCM GPIO (`CLK` / `DT` / `SW`). RAW: CW / CCW / switch triggers. MODESELECTOR: switch cycles named signals, rotation sets 0–1. Run the gateway on the Pi.
 - **Sessions** — New / Open / Save in the header. A new session starts empty. Press **1** (or **+**) to add sources. Copies of the same type get OSC ids (`/weather/1/…`). The last session reloads on startup.
 - **Output** — right panel charts the selected source’s outgoing signals.
-- **OSC** — start/stop streaming from the header. **Edit** sets the UDP input port, destinations, and a routing matrix (sources × destinations; default all → all). Incoming UDP is shown in the bottom dock and passed through to routed destinations.
+- **Preview** — header button. One 3D body of live OSC: nodes are signals, clustered by source; particles travel when values move. Drag to orbit, scroll to zoom.
+- **OSC** — start/stop streaming from the header. **Edit** sets the UDP input port, destinations, and a routing matrix (sources × destinations; default all → all). Incoming UDP is shown in the bottom dock and passed through to routed destinations. Incoming senders are grouped by IP (not UDP port), so a phone that opens a new port each session keeps the same source and settings.
 
 Settings are stored in the browser and restored on reload.
 
