@@ -5,6 +5,7 @@
 export const TIME_PREFIX = '/time';
 
 export const TIME_FIELDS = [
+  { id: 'minute', address: '/time/minute', label: 'Minute' },
   { id: 'hour', address: '/time/hour', label: 'Hour' },
   { id: 'day', address: '/time/day', label: 'Day' },
   { id: 'week', address: '/time/week', label: 'Week' },
@@ -13,6 +14,7 @@ export const TIME_FIELDS = [
 ];
 
 export const DEFAULT_TIME_FIELDS = {
+  minute: true,
   hour: true,
   day: true,
   week: true,
@@ -39,6 +41,16 @@ function weekdayOffset(d, weekStart) {
 export function timeProgress(now = new Date(), { weekStart = 1 } = {}) {
   const t = now.getTime();
 
+  const minuteStart = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+  );
+  const minuteEnd = new Date(minuteStart);
+  minuteEnd.setMinutes(minuteEnd.getMinutes() + 1);
+
   const hourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
   const hourEnd = new Date(hourStart);
   hourEnd.setHours(hourEnd.getHours() + 1);
@@ -60,6 +72,7 @@ export function timeProgress(now = new Date(), { weekStart = 1 } = {}) {
   const yearEnd = new Date(now.getFullYear() + 1, 0, 1);
 
   return {
+    minute: clamp01((t - minuteStart.getTime()) / (minuteEnd - minuteStart)),
     hour: clamp01((t - hourStart.getTime()) / (hourEnd - hourStart)),
     day: clamp01((t - dayStart.getTime()) / (dayEnd - dayStart)),
     week: clamp01((t - weekStartDate.getTime()) / (weekEnd - weekStartDate)),

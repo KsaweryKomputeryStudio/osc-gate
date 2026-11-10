@@ -179,7 +179,7 @@ export function renderSourceNav($, setActiveSection) {
   const active = loadConfig().ui.activeSection;
   const sources = listInstances();
   if (!sources.length) {
-    host.innerHTML = '<p class="nav-hint">Empty session. Press 1 to add a source.</p>';
+    host.innerHTML = '';
     return;
   }
   host.innerHTML = sources

@@ -63,7 +63,7 @@ export const SOURCE_CATEGORIES = [
   {
     id: 'time',
     label: 'Time',
-    types: [{ id: 'time', label: 'Time', icon: 'TM', prefix: '/time', kind: 'view', hint: 'Local hour / day / week / month / year as 0–1.' }],
+    types: [{ id: 'time', label: 'Time', icon: 'TM', prefix: '/time', kind: 'view', hint: 'Local minute / hour / day / week / month / year as 0–1.' }],
   },
   {
     id: 'weather',

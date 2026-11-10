@@ -28,7 +28,7 @@ Then log out and back in. Restart the gateway after install so it picks up GPIO.
 - **Weather** — click a point on the map (or search). Current conditions from Open-Meteo; pick which `/weather/…` addresses to send.
 - **Microphone** — selected input volume as `/mic/level` and `/mic/peak` (0–1).
 - **Soundcard** (beta) — multi-channel input via the local gateway. `/soundcard/ch/1` … level and peak. Restart `./run` after install.
-- **Time** — local hour / day / week / month / year progress as 0–1 (`/time/hour`, `/time/day`, `/time/week`, …).
+- **Time** — local minute / hour / day / week / month / year progress as 0–1 (`/time/minute`, `/time/hour`, `/time/day`, …).
 - **Human count** — webcam + YOLOv8n person detector. Sends `/human/count` (raw, auto 0–1, or manual 0–1) and `/human/present`.
 - **Hands** — webcam + MediaPipe. Left/right palm, pinch, grab, fingertips, and gestures as 0–1 (`/hands/left/…`, `/hands/right/…`).
 - **Encoder** (Raspberry Pi) — KY-040-style rotary encoder + switch on BCM GPIO (`CLK` / `DT` / `SW`). RAW: CW / CCW / switch triggers. MODESELECTOR: switch cycles named signals, rotation sets 0–1. Run the gateway on the Pi.

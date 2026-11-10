@@ -183,6 +183,7 @@ Local-timezone calendar progress as **0–1**. `0` is the start of the period, `
 
 | Address | Args | Meaning |
 |---------|------|---------|
+| `/time/minute` | f | Start of minute → next minute |
 | `/time/hour` | f | Start of hour → next hour |
 | `/time/day` | f | Midnight → next midnight |
 | `/time/week` | f | Start of week 00:00 → next week |
